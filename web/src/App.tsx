@@ -212,6 +212,93 @@ const App: React.FC = () => {
   const [debugTimes, setDebugTimes] = useState(false);
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
+  const [manualActive, setManualActive] = useState(false);
+  const [manualIndex, setManualIndex] = useState(0);
+  const [manualCues, setManualCues] = useState<Cue[]>([]);
+  const [manualMessage, setManualMessage] = useState<string | null>(null);
+  const [vttUrl, setVttUrl] = useState("");
+  const [lyricsUrl, setLyricsUrl] = useState("");
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
+
+  const exportProject = () => {
+    const payload = {
+      version: 1,
+      videoId,
+      youtubeUrl,
+      vttInput,
+      lyricsInput,
+      globalOffsetMs,
+      cues
+    };
+    downloadText("tw-lyrics-project.json", JSON.stringify(payload, null, 2));
+  };
+
+  const importProject = async (file: File) => {
+    const text = await file.text();
+    try {
+      const data = JSON.parse(text);
+      if (typeof data?.videoId === "string") {
+        setVideoId(data.videoId);
+        setYoutubeUrl(data.youtubeUrl ?? `https://youtu.be/${data.videoId}`);
+      }
+      if (typeof data?.vttInput === "string") setVttInput(data.vttInput);
+      if (typeof data?.lyricsInput === "string")
+        setLyricsInput(data.lyricsInput);
+      if (typeof data?.globalOffsetMs === "number")
+        setGlobalOffsetMs(data.globalOffsetMs);
+      if (Array.isArray(data?.cues)) {
+        setCues(
+          data.cues.map((c: any) => ({
+            startMs: Number(c.startMs),
+            endMs: Number(c.endMs),
+            text: String(c.text ?? ""),
+            twText: typeof c.twText === "string" ? c.twText : undefined
+          }))
+        );
+      } else if (typeof data?.vttInput === "string") {
+        parseAndMap(data.vttInput, data.lyricsInput ?? "");
+      }
+    } catch {
+      setParseError("프로젝트 파일 파싱 실패.");
+    }
+  };
+
+  const buildShareLink = () => {
+    if (!videoId || !vttUrl) return "";
+    const url = new URL(window.location.href);
+    url.searchParams.set("v", videoId);
+    url.searchParams.set("vtt", vttUrl);
+    if (lyricsUrl) {
+      url.searchParams.set("lyrics", lyricsUrl);
+    } else {
+      url.searchParams.delete("lyrics");
+    }
+    return url.toString();
+  };
+
+  const shareLink = useMemo(
+    () => buildShareLink(),
+    [videoId, vttUrl, lyricsUrl]
+  );
+
+  const copyShareLink = async () => {
+    setShareMessage(null);
+    if (!videoId) {
+      setShareMessage("먼저 YouTube 영상을 불러오세요.");
+      return;
+    }
+    if (!vttUrl) {
+      setShareMessage("VTT/SRT 공개 URL을 입력하세요.");
+      return;
+    }
+    const link = buildShareLink();
+    try {
+      await navigator.clipboard.writeText(link);
+      setShareMessage("공유 링크가 복사되었습니다.");
+    } catch {
+      setShareMessage("복사 실패. 아래 링크를 수동으로 복사하세요.");
+    }
+  };
 
   useEffect(() => {
     if (window.YT?.Player) return;
@@ -280,9 +367,9 @@ const App: React.FC = () => {
 
   const activeCue = activeIndex >= 0 ? cues[activeIndex] : null;
 
-  const applyParsing = () => {
+  const parseAndMap = (vttText: string, lyricsText: string) => {
     setParseError(null);
-    const trimmedVtt = vttInput.trim();
+    const trimmedVtt = vttText.trim();
     if (!trimmedVtt) {
       setParseError("VTT 또는 SRT 자막을 입력하세요.");
       return;
@@ -300,9 +387,99 @@ const App: React.FC = () => {
       setParseError("자막 파싱 실패. VTT 또는 SRT 형식을 확인하세요.");
       return;
     }
-    const lines = parseLyricsLines(lyricsInput);
+    const lines = parseLyricsLines(lyricsText);
     const mapped = mapLyricsToCues(parsed, lines);
     setCues(mapped);
+  };
+
+  const applyParsing = () => {
+    parseAndMap(vttInput, lyricsInput);
+  };
+
+  const getPlayerTimeMs = () => {
+    const player = playerRef.current;
+    if (!player?.getCurrentTime) return null;
+    const seconds = player.getCurrentTime();
+    if (typeof seconds !== "number") return null;
+    return Math.floor(seconds * 1000);
+  };
+
+  const startManualSync = () => {
+    setManualMessage(null);
+    const lines = parseLyricsLines(lyricsInput);
+    if (lines.length === 0) {
+      setManualMessage("대만어 가사를 먼저 입력하세요.");
+      return;
+    }
+    const initial = lines.map((line) => ({
+      startMs: -1,
+      endMs: -1,
+      text: line,
+      twText: line
+    }));
+    setManualCues(initial);
+    setManualIndex(0);
+    setManualActive(true);
+  };
+
+  const tapManualSync = () => {
+    setManualMessage(null);
+    if (!manualActive || manualCues.length === 0) return;
+    const t = getPlayerTimeMs();
+    if (t === null) {
+      setManualMessage("먼저 영상을 재생하세요.");
+      return;
+    }
+    const isFirstTap =
+      manualIndex === 0 && (manualCues[0]?.startMs ?? -1) < 0;
+    setManualCues((prev) => {
+      const next = prev.map((c) => ({ ...c }));
+      const current = next[manualIndex];
+      if (!current) return next;
+      if (manualIndex === 0 && current.startMs < 0) {
+        current.startMs = t;
+        return next;
+      }
+      if (current.startMs < 0) {
+        current.startMs = t;
+        return next;
+      }
+      if (current.endMs < 0) {
+        current.endMs = t;
+      }
+      if (manualIndex < next.length - 1) {
+        const nextCue = next[manualIndex + 1];
+        if (nextCue && nextCue.startMs < 0) nextCue.startMs = t;
+      }
+      return next;
+    });
+
+    if (manualIndex >= manualCues.length - 1) {
+      setManualActive(false);
+      setManualMessage("수동 타이밍 완료. 적용 버튼을 눌러주세요.");
+      return;
+    }
+
+    if (isFirstTap) {
+      return;
+    }
+    setManualIndex((idx) => Math.min(manualCues.length - 1, idx + 1));
+  };
+
+  const applyManualCues = () => {
+    setManualMessage(null);
+    if (manualCues.length === 0) {
+      setManualMessage("수동 타이밍 결과가 없습니다.");
+      return;
+    }
+    const invalid = manualCues.some(
+      (c) => c.startMs < 0 || c.endMs < 0 || c.endMs <= c.startMs
+    );
+    if (invalid) {
+      setManualMessage("아직 끝 시간이 없는 줄이 있습니다. 재생하면서 탭을 더 눌러주세요.");
+      return;
+    }
+    setCues(manualCues.map((c) => ({ ...c })));
   };
 
   const onLoadYoutube = () => {
@@ -355,6 +532,40 @@ const App: React.FC = () => {
     const text = await file.text();
     setText(text);
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const v = params.get("v");
+    const vttUrl = params.get("vtt");
+    const lyricsUrl = params.get("lyrics");
+    if (v) {
+      setVideoId(v);
+      setYoutubeUrl(`https://youtu.be/${v}`);
+    }
+    if (!vttUrl && !lyricsUrl) return;
+    if (vttUrl) setVttUrl(vttUrl);
+    if (lyricsUrl) setLyricsUrl(lyricsUrl);
+
+    const fetchText = async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`fetch_failed:${url}`);
+      return res.text();
+    };
+
+    (async () => {
+      try {
+        const [vttText, lyricsText] = await Promise.all([
+          vttUrl ? fetchText(vttUrl) : Promise.resolve(""),
+          lyricsUrl ? fetchText(lyricsUrl) : Promise.resolve("")
+        ]);
+        if (vttText) setVttInput(vttText);
+        if (lyricsText) setLyricsInput(lyricsText);
+        if (vttText) parseAndMap(vttText, lyricsText);
+      } catch {
+        setParseError("외부 자막/가사 불러오기 실패. URL과 CORS 설정을 확인하세요.");
+      }
+    })();
+  }, []);
 
   return (
     <div className="page">
@@ -422,6 +633,19 @@ const App: React.FC = () => {
           파싱 & 자동 매핑
         </button>
         <div className="row">
+          <button className="btn" onClick={exportProject}>
+            프로젝트 내보내기(JSON)
+          </button>
+          <input
+            type="file"
+            accept=".json"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) importProject(file);
+            }}
+          />
+        </div>
+        <div className="row">
           <label className="label">전체 오프셋: {globalOffsetMs}ms</label>
           <input
             type="range"
@@ -461,6 +685,69 @@ const App: React.FC = () => {
           </button>
         </div>
         {parseError && <p className="error">{parseError}</p>}
+      </section>
+
+      <section className="panel actions">
+        <h2>공유 링크 생성</h2>
+        <p className="label">
+          VTT/SRT와 가사를 공개 URL에 올린 뒤 링크만 공유하면 자동으로 자막이 로딩됩니다.
+        </p>
+        <div className="row">
+          <input
+            className="input"
+            placeholder="VTT/SRT 공개 URL"
+            value={vttUrl}
+            onChange={(e) => setVttUrl(e.target.value)}
+          />
+          <input
+            className="input"
+            placeholder="가사 TXT URL (선택)"
+            value={lyricsUrl}
+            onChange={(e) => setLyricsUrl(e.target.value)}
+          />
+          <button className="btn primary" onClick={copyShareLink}>
+            링크 복사
+          </button>
+        </div>
+        <div className="row">
+          <input
+            className="input"
+            readOnly
+            value={shareLink}
+            placeholder="여기에 공유 링크가 표시됩니다."
+          />
+        </div>
+        {shareMessage && <p className="error">{shareMessage}</p>}
+      </section>
+
+      <section className="panel actions">
+        <h2>수동 타이밍 (Whisper 없이)</h2>
+        <p className="label">
+          재생 중에 탭을 눌러 줄별 시작/끝 시간을 기록합니다. 첫 번째 탭은 1줄 시작,
+          이후 탭은 현재 줄 종료 + 다음 줄 시작으로 처리됩니다.
+        </p>
+        <div className="row">
+          <button className="btn" onClick={startManualSync}>
+            수동 타이밍 시작
+          </button>
+          <button className="btn primary" onClick={tapManualSync} disabled={!manualActive}>
+            탭/다음 줄
+          </button>
+          <button className="btn" onClick={applyManualCues}>
+            수동 결과 적용
+          </button>
+        </div>
+        {manualCues.length > 0 && (
+          <div className="row">
+            <span className="label">
+              진행: {manualIndex + 1} / {manualCues.length}
+            </span>
+            <span className="label">
+              현재 줄: {manualCues[manualIndex]?.twText ?? ""}
+            </span>
+          </div>
+        )}
+        {manualMessage && <p className="error">{manualMessage}</p>}
       </section>
 
       <section className="panel display">

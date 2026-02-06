@@ -36,5 +36,24 @@ npm run build
 6) 필요 시 특정 줄 텍스트 수정
 7) VTT 또는 LRC로 내보내기
 
+### Whisper 없이 하는 방법
+- "수동 타이밍" 섹션에서 재생 중 탭을 눌러 줄별 시작/끝 시간을 기록
+- 완료 후 "수동 결과 적용"을 눌러 바로 재생/내보내기
+
+## 공유해서 다른 사람이 바로 보게 하기
+### 1) 링크로 자동 로딩 (추천)
+1. 완성된 VTT 파일과 가사 TXT를 공개 URL에 올립니다. (예: GitHub Pages, gist raw)
+2. 아래 형식으로 링크를 공유하면 접속 즉시 자동 로딩됩니다.
+```
+https://<your-pages>/index.html?v=<VIDEO_ID>&vtt=<VTT_URL>&lyrics=<LYRICS_URL>
+```
+- `v` : YouTube videoId
+- `vtt` : VTT/SRT 파일의 공개 URL (CORS 허용 필요)
+- `lyrics` : 가사 텍스트 파일 URL (선택)
+
+### 2) 프로젝트 파일로 공유
+- "프로젝트 내보내기(JSON)" → `.json` 공유
+- 상대는 파일 업로드만 하면 그대로 재생 가능
+
 ## 로컬 워크플로우 (무료)
 `tools/README.md` 참고.
