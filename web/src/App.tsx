@@ -571,8 +571,8 @@ const App: React.FC = () => {
     <div className="page">
       <header className="header">
         <div>
-          <h1>TW Lyrics Sync</h1>
-          <p>유튜브 링크 + 대만어 가사만으로 빠르게 싱크 맞추기</p>
+          <h1>只屬於我最愛的 Belle 的空間</h1>
+          <p>我們的歌，我們的時間</p>
         </div>
       </header>
 
@@ -589,6 +589,27 @@ const App: React.FC = () => {
           </button>
         </div>
         <div className="player" ref={playerHostRef} />
+      </section>
+
+      <section className="panel display">
+        <div className="lyrics">
+          <div className="line prev">
+            {activeIndex > 0
+              ? cues[activeIndex - 1]?.twText ?? cues[activeIndex - 1]?.text
+              : ""}
+          </div>
+          <div className="line current">
+            {activeCue ? activeCue.twText ?? activeCue.text : "재생 중..."}
+            {debugTimes && activeCue && (
+              <div className="time">{formatMs(activeCue.startMs)} - {formatMs(activeCue.endMs)}</div>
+            )}
+          </div>
+          <div className="line next">
+            {activeIndex >= 0 && activeIndex < cues.length - 1
+              ? cues[activeIndex + 1]?.twText ?? cues[activeIndex + 1]?.text
+              : ""}
+          </div>
+        </div>
       </section>
 
       <section className="panel grid">
@@ -748,27 +769,6 @@ const App: React.FC = () => {
           </div>
         )}
         {manualMessage && <p className="error">{manualMessage}</p>}
-      </section>
-
-      <section className="panel display">
-        <div className="lyrics">
-          <div className="line prev">
-            {activeIndex > 0
-              ? cues[activeIndex - 1]?.twText ?? cues[activeIndex - 1]?.text
-              : ""}
-          </div>
-          <div className="line current">
-            {activeCue ? activeCue.twText ?? activeCue.text : "재생 중..."}
-            {debugTimes && activeCue && (
-              <div className="time">{formatMs(activeCue.startMs)} - {formatMs(activeCue.endMs)}</div>
-            )}
-          </div>
-          <div className="line next">
-            {activeIndex >= 0 && activeIndex < cues.length - 1
-              ? cues[activeIndex + 1]?.twText ?? cues[activeIndex + 1]?.text
-              : ""}
-          </div>
-        </div>
       </section>
 
       <section className="panel list">
