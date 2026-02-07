@@ -30,6 +30,36 @@ npm run build
 ```
 그 다음 `docs/`를 커밋/푸시하면 `https://dohoonidot.github.io/forBelle/` 에 반영됩니다.
 
+## 신청곡 Firebase 설정 (비밀번호 로그인)
+신청곡은 Firestore에 저장됩니다. 비밀번호로 로그인하면 브라우저에 유지되며, 로그인된 상태에서만 요청 저장/조회가 가능합니다.
+
+1) Firebase 콘솔에서 새 프로젝트 생성  
+2) Firestore Database 만들기 (Production/테스트 모드 아무거나 시작 가능)  
+3) Project Settings → General → Your apps → Web app 추가  
+4) Firebase Authentication 활성화 (Email/Password)
+   - 사용자 생성: `admin@forbelle.local` + 원하는 비밀번호
+5) 아래 `.env` 파일을 생성하고 값을 채우기 (`web/.env`)
+```
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=...
+VITE_FIREBASE_PROJECT_ID=...
+VITE_FIREBASE_APP_ID=...
+```
+6) Firestore Rules (Production 모드 유지)
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /song_requests/{doc} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
+7) `npm run build` 후 `docs/` 커밋/푸시
+
+`.env` 템플릿은 `web/.env.example` 참고.
+
 ## 사용 방법
 1) YouTube 링크 입력 후 "영상 불러오기"
 2) 대만어 가사 붙여넣기 (줄 단위)
