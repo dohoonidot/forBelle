@@ -1,9 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { songs, Song } from "./songs";
 import { motion, AnimatePresence } from "framer-motion";
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, writeBatch, where } from "firebase/firestore";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { auth, db } from "./firebase";
+import { auth, db, storage } from "./firebase";
+import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Underline from "@tiptap/extension-underline";
+import Link from "@tiptap/extension-link";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
+import Table from "@tiptap/extension-table";
+import TableRow from "@tiptap/extension-table-row";
+import TableHeader from "@tiptap/extension-table-header";
+import TableCell from "@tiptap/extension-table-cell";
+import Placeholder from "@tiptap/extension-placeholder";
+import Image from "@tiptap/extension-image";
 import {
   Home,
   X,
@@ -17,7 +30,11 @@ import {
   Upload,
   CheckCircle,
   AlertCircle,
-  MessageSquarePlus
+  MessageSquarePlus,
+  FolderPlus,
+  FilePlus,
+  ChevronRight,
+  ChevronDown
 } from "lucide-react";
 
 type Cue = {
@@ -41,12 +58,26 @@ type ChatMessage = {
   createdAt?: number;
   createdBy?: string;
   createdByName?: string;
+  createdByPhotoURL?: string;
+};
+
+type TopicNode = {
+  id: string;
+  name: string;
+  type: "folder" | "file";
+  parentId?: string | null;
+  content?: string;
+  updatedAt?: number;
+  createdBy?: string;
+  defaultKey?: string;
 };
 
 type Profile = {
   nickname?: string;
   lang?: Lang;
   onboardingDone?: boolean;
+  photoURL?: string;
+  lineHeight?: number;
 };
 
 declare global {
@@ -56,8 +87,177 @@ declare global {
   }
 }
 
-type AppMode = "home" | "editor" | "viewer" | "request" | "message";
+type AppMode = "home" | "editor" | "viewer" | "request" | "message" | "topics";
 type Lang = "ko" | "en" | "zh";
+
+type TopicTreeProps = {
+  node: TopicNode;
+  nodes: TopicNode[];
+  expandedFolders: string[];
+  toggleFolder: (id: string) => void;
+  selectTopic: (node: TopicNode) => void;
+  selectedId: string | null;
+  selectedFolderId: string | null;
+  onSelectFolder: (id: string | null) => void;
+  createTopicNode: (type: "folder" | "file", parentId: string | null) => void;
+  onRename: (node: TopicNode) => void;
+  onDelete: (node: TopicNode) => void;
+  onMove: (id: string, parentId: string | null) => void;
+  editingId: string | null;
+  editingName: string;
+  setEditingName: (v: string) => void;
+  onSaveRename: (id: string) => void;
+  onCancelRename: () => void;
+  tr: (ko: string, en: string, zh: string) => string;
+  depth: number;
+  onOpenContextMenu: (x: number, y: number, node: TopicNode) => void;
+};
+
+const TopicTreeNode = ({
+  node,
+  nodes,
+  expandedFolders,
+  toggleFolder,
+  selectTopic,
+  selectedId,
+  selectedFolderId,
+  onSelectFolder,
+  createTopicNode,
+  onRename,
+  onDelete,
+  onMove,
+  editingId,
+  editingName,
+  setEditingName,
+  onSaveRename,
+  onCancelRename,
+  tr,
+  depth,
+  onOpenContextMenu
+}: TopicTreeProps) => {
+  const children = nodes.filter((n) => n.parentId === node.id);
+  const isFolder = node.type === "folder";
+  const isExpanded = isFolder && expandedFolders.includes(node.id);
+  const isEditing = editingId === node.id;
+  const indent = depth * 12;
+  const isSelected = selectedId === node.id || (isFolder && selectedFolderId === node.id);
+
+  return (
+    <li style={{ marginBottom: 2, borderBottom: "1px solid #eee" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "20px 16px 1fr",
+          alignItems: "center",
+          columnGap: 6,
+          padding: "4px 6px",
+          borderRadius: 6,
+          marginLeft: indent,
+          background: isSelected ? "#EEE7DD" : "transparent"
+        }}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/plain", node.id);
+        }}
+        onDragOver={(e) => {
+          if (isFolder) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          if (!isFolder) return;
+          e.preventDefault();
+          const id = e.dataTransfer.getData("text/plain");
+          if (id && id !== node.id) onMove(id, node.id);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onOpenContextMenu(e.clientX, e.clientY, node);
+        }}
+        onTouchStart={(e) => {
+          const touch = e.touches[0];
+          if (!touch) return;
+          const timer = window.setTimeout(() => {
+            onOpenContextMenu(touch.clientX, touch.clientY, node);
+          }, 500);
+          const clear = () => window.clearTimeout(timer);
+          e.currentTarget.addEventListener("touchend", clear, { once: true });
+          e.currentTarget.addEventListener("touchmove", clear, { once: true });
+          e.currentTarget.addEventListener("touchcancel", clear, { once: true });
+        }}
+      >
+        {isFolder ? (
+          <button className="btn small" onClick={() => toggleFolder(node.id)} style={{ padding: "2px 4px" }}>
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+        ) : (
+          <div style={{ width: 20 }} />
+        )}
+        <div style={{ width: 16, textAlign: "center" }}>{isFolder ? "📁" : "📄"}</div>
+        {isEditing ? (
+          <input
+            className="input"
+            style={{ minWidth: 0 }}
+            value={editingName}
+            onChange={(e) => setEditingName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSaveRename(node.id);
+              if (e.key === "Escape") onCancelRename();
+            }}
+            onBlur={() => onSaveRename(node.id)}
+            autoFocus
+          />
+        ) : (
+          <button
+            className="btn small"
+            style={{
+              justifyContent: "flex-start",
+              padding: "2px 4px",
+              fontSize: 12
+            }}
+            onClick={() => {
+              if (isFolder) {
+                toggleFolder(node.id);
+                onSelectFolder(node.id);
+              } else {
+                selectTopic(node);
+              }
+            }}
+          >
+            {node.name}
+          </button>
+        )}
+      </div>
+      {isFolder && isExpanded && children.length > 0 && (
+        <ul className="song-list" style={{ marginTop: 2 }}>
+          {children.map((child) => (
+            <TopicTreeNode
+              key={child.id}
+              node={child}
+              nodes={nodes}
+              expandedFolders={expandedFolders}
+              toggleFolder={toggleFolder}
+              selectTopic={selectTopic}
+              selectedId={selectedId}
+              selectedFolderId={selectedFolderId}
+              onSelectFolder={onSelectFolder}
+              createTopicNode={createTopicNode}
+              onRename={onRename}
+              onDelete={onDelete}
+              onMove={onMove}
+              editingId={editingId}
+              editingName={editingName}
+              setEditingName={setEditingName}
+              onSaveRename={onSaveRename}
+              onCancelRename={onCancelRename}
+              tr={tr}
+              depth={depth + 1}
+              onOpenContextMenu={onOpenContextMenu}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+};
 
 const POLL_MS = 150;
 
@@ -275,6 +475,21 @@ const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageInput, setMessageInput] = useState("");
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [topicNodes, setTopicNodes] = useState<TopicNode[]>([]);
+  const [topicsLoading, setTopicsLoading] = useState(false);
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [topicContent, setTopicContent] = useState("");
+  const [expandedFolders, setExpandedFolders] = useState<string[]>([]);
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [editingTopicName, setEditingTopicName] = useState("");
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    node: TopicNode;
+  } | null>(null);
+  const initializingTopicsRef = useRef(false);
+  const saveTopicTimer = useRef<number | null>(null);
   const [adminEmailInput, setAdminEmailInput] = useState("belle@kim.com");
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
   const [adminError, setAdminError] = useState<string | null>(null);
@@ -287,8 +502,10 @@ const App: React.FC = () => {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [nickname, setNickname] = useState("");
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string>("");
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [lineHeight, setLineHeight] = useState(0.5);
 
   const firebaseReady =
     Boolean(import.meta.env.VITE_FIREBASE_API_KEY) &&
@@ -324,8 +541,12 @@ const App: React.FC = () => {
       }
       const data = snap.data() as Profile;
       setNickname(data.nickname ?? "");
+      setProfilePhotoUrl(data.photoURL ?? "");
       if (data.lang === "ko" || data.lang === "en" || data.lang === "zh") {
         setLang(data.lang);
+      }
+      if (typeof data.lineHeight === "number") {
+        setLineHeight(data.lineHeight);
       }
       setShowSettings(!data.onboardingDone);
     } finally {
@@ -338,10 +559,35 @@ const App: React.FC = () => {
     const trimmed = nickname.trim();
     await setDoc(
       doc(db, "profiles", auth.currentUser.uid),
-      { nickname: trimmed, lang, updatedAt: serverTimestamp() },
+      { nickname: trimmed, lang, photoURL: profilePhotoUrl || "", lineHeight, updatedAt: serverTimestamp() },
       { merge: true }
     );
     setProfileMessage(tr("닉네임이 변경되었습니다.", "Nickname updated.", "昵称已更新。"));
+  };
+
+  const updateLineHeight = async (value: number) => {
+    setLineHeight(value);
+    if (adminAuthed && firebaseReady && auth.currentUser) {
+      await setDoc(
+        doc(db, "profiles", auth.currentUser.uid),
+        { lineHeight: value, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    }
+  };
+
+  const handleAvatarUpload = async (file: File) => {
+    if (!firebaseReady || !auth.currentUser) return;
+    const ref = storageRef(storage, `avatars/${auth.currentUser.uid}`);
+    await uploadBytes(ref, file);
+    const url = await getDownloadURL(ref);
+    setProfilePhotoUrl(url);
+    await setDoc(
+      doc(db, "profiles", auth.currentUser.uid),
+      { photoURL: url, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+    setProfileMessage(tr("프로필 사진이 업데이트되었습니다.", "Profile photo updated.", "头像已更新。"));
   };
 
   const completeOnboarding = async () => {
@@ -362,7 +608,249 @@ const App: React.FC = () => {
         { lang: next, updatedAt: serverTimestamp() },
         { merge: true }
       );
+      await syncDefaultTopicNames(next);
     }
+  };
+
+  const defaultTopicName = (key: string, langValue: Lang) => {
+    if (key === "root_folder") {
+      return langValue === "en" ? "Daily Topics" : langValue === "zh" ? "今日主题" : "오늘의 주제";
+    }
+    if (key === "root_note") {
+      return langValue === "en" ? "First note" : langValue === "zh" ? "第一条笔记" : "첫 노트";
+    }
+    return "Untitled";
+  };
+
+  const syncDefaultTopicNames = async (langValue: Lang) => {
+    if (!firebaseReady || !adminAuthed) return;
+    const q = query(
+      collection(db, "topics"),
+      where("defaultKey", "in", ["root_folder", "root_note"])
+    );
+    const snapshot = await getDocs(q);
+    const batch = writeBatch(db);
+    snapshot.docs.forEach((docSnap) => {
+      const data = docSnap.data() as { defaultKey?: string };
+      const key = data.defaultKey;
+      if (!key) return;
+      batch.set(docSnap.ref, { name: defaultTopicName(key, langValue), updatedAt: serverTimestamp() }, { merge: true });
+    });
+    await batch.commit();
+  };
+
+  const createDefaultTopics = async () => {
+    if (!firebaseReady || !adminAuthed) return;
+    if (initializingTopicsRef.current) return;
+    initializingTopicsRef.current = true;
+    try {
+      const folderName = defaultTopicName("root_folder", lang);
+      const noteName = defaultTopicName("root_note", lang);
+      const folderRef = await addDoc(collection(db, "topics"), {
+        name: folderName,
+        type: "folder",
+        parentId: null,
+        content: "",
+        defaultKey: "root_folder",
+        createdBy: auth.currentUser?.email ?? "",
+        updatedAt: serverTimestamp()
+      });
+      const noteRef = await addDoc(collection(db, "topics"), {
+        name: noteName,
+        type: "file",
+        parentId: folderRef.id,
+        content: "",
+        defaultKey: "root_note",
+        createdBy: auth.currentUser?.email ?? "",
+        updatedAt: serverTimestamp()
+      });
+      setExpandedFolders((prev) => (prev.includes(folderRef.id) ? prev : [...prev, folderRef.id]));
+      setSelectedTopicId(noteRef.id);
+      setSelectedFolderId(folderRef.id);
+      setTopicContent("");
+    } finally {
+      initializingTopicsRef.current = false;
+    }
+  };
+
+  const subscribeTopics = () => {
+    if (!firebaseReady) return () => {};
+    setTopicsLoading(true);
+    const q = query(collection(db, "topics"), orderBy("updatedAt", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const items = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data() as {
+            name?: string;
+            type?: "folder" | "file";
+            parentId?: string | null;
+            content?: string;
+            updatedAt?: Timestamp;
+            createdBy?: string;
+          };
+          return {
+            id: docSnap.id,
+            name: data.name ?? "Untitled",
+            type: data.type ?? "file",
+            parentId: data.parentId ?? null,
+            content: data.content ?? "",
+            updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toMillis() : undefined,
+            createdBy: data.createdBy ?? ""
+          };
+        });
+        setTopicNodes(items);
+        if (items.length === 0) {
+          setSelectedTopicId(null);
+          setSelectedFolderId(null);
+          void createDefaultTopics();
+        }
+        setTopicsLoading(false);
+      },
+      () => setTopicsLoading(false)
+    );
+    return unsub;
+  };
+
+  const createTopicNode = async (type: "folder" | "file", parentId: string | null) => {
+    if (!firebaseReady || !adminAuthed) return;
+    const name = type === "folder" ? tr("새 폴더", "New folder", "新建文件夹") : tr("새 노트", "New note", "新建笔记");
+    const docRef = await addDoc(collection(db, "topics"), {
+      name,
+      type,
+      parentId: parentId ?? null,
+      content: "",
+      createdBy: auth.currentUser?.email ?? "",
+      updatedAt: serverTimestamp()
+    });
+    if (parentId) {
+      setExpandedFolders((prev) => (prev.includes(parentId) ? prev : [...prev, parentId]));
+      setSelectedFolderId(parentId);
+    }
+    if (type === "file") {
+      setSelectedTopicId(docRef.id);
+      setTopicContent("");
+    } else {
+      setExpandedFolders((prev) => (prev.includes(docRef.id) ? prev : [...prev, docRef.id]));
+    }
+  };
+
+  const updateTopicContent = (id: string, content: string) => {
+    setTopicContent(content);
+    if (!firebaseReady || !adminAuthed) return;
+    if (saveTopicTimer.current) window.clearTimeout(saveTopicTimer.current);
+    saveTopicTimer.current = window.setTimeout(async () => {
+      await setDoc(
+        doc(db, "topics", id),
+        { content, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    }, 800);
+  };
+
+  const insertLink = () => {
+    if (!editor) return;
+    const url = window.prompt(tr("링크 URL을 입력하세요", "Enter link URL", "输入链接 URL"));
+    if (!url) return;
+    editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+  };
+
+  const insertImage = () => {
+    if (!editor) return;
+    const url = window.prompt(tr("이미지 URL을 입력하세요", "Enter image URL", "输入图片 URL"));
+    if (!url) return;
+    editor.chain().focus().setImage({ src: url }).run();
+  };
+
+  const toolbarBtnStyle = (active?: boolean) => ({
+    background: active ? "#222" : undefined,
+    color: active ? "#fff" : undefined
+  });
+
+  const startRenameTopic = (node: TopicNode) => {
+    setEditingTopicId(node.id);
+    setEditingTopicName(node.name);
+  };
+
+  const saveRenameTopic = async (id: string) => {
+    if (!firebaseReady || !adminAuthed) return;
+    const name = editingTopicName.trim() || tr("새 노트", "New note", "新建笔记");
+    await setDoc(doc(db, "topics", id), { name, updatedAt: serverTimestamp() }, { merge: true });
+    setEditingTopicId(null);
+    setEditingTopicName("");
+  };
+
+  const cancelRename = () => {
+    setEditingTopicId(null);
+    setEditingTopicName("");
+  };
+
+  const openContextMenu = (x: number, y: number, node: TopicNode) => {
+    setContextMenu({ x, y, node });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu(null);
+  };
+
+  const deleteTopicNode = async (node: TopicNode) => {
+    if (!firebaseReady || !adminAuthed) return;
+    const batch = writeBatch(db);
+    const collectIds = (n: TopicNode) => {
+      batch.delete(doc(db, "topics", n.id));
+      topicNodes.filter((c) => c.parentId === n.id).forEach(collectIds);
+    };
+    collectIds(node);
+    await batch.commit();
+    if (selectedTopicId === node.id) {
+      setSelectedTopicId(null);
+      setTopicContent("");
+    }
+  };
+
+  const moveTopicNode = async (id: string, parentId: string | null) => {
+    if (!firebaseReady || !adminAuthed) return;
+    await setDoc(
+      doc(db, "topics", id),
+      { parentId: parentId ?? null, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+  };
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      Underline,
+      Link.configure({ openOnClick: true, autolink: true, linkOnPaste: true }),
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      Placeholder.configure({
+        placeholder: tr("여기에 내용을 작성하세요. Markdown처럼 작성해도 됩니다.", "Write here. Markdown-like syntax is okay.", "在此编写内容，可使用类似 Markdown 的语法。")
+      }),
+      Image
+    ],
+    content: "",
+    editable: true,
+    onUpdate: ({ editor }) => {
+      if (selectedTopicId) {
+        updateTopicContent(selectedTopicId, editor.getHTML());
+      }
+    }
+  });
+
+  const toggleFolder = (id: string) => {
+    setExpandedFolders((prev) => (prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]));
+  };
+
+  const selectTopic = (node: TopicNode) => {
+    if (node.type !== "file") return;
+    setSelectedTopicId(node.id);
+    setTopicContent(node.content ?? "");
+    setSelectedFolderId(node.parentId ?? null);
   };
 
   const subscribeMessages = () => {
@@ -373,13 +861,14 @@ const App: React.FC = () => {
       q,
       (snapshot) => {
         const items = snapshot.docs.map((docSnap) => {
-          const data = docSnap.data() as { text?: string; createdAt?: Timestamp; createdBy?: string; createdByName?: string };
+          const data = docSnap.data() as { text?: string; createdAt?: Timestamp; createdBy?: string; createdByName?: string; createdByPhotoURL?: string };
           return {
             id: docSnap.id,
             text: data.text ?? "",
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : undefined,
             createdBy: data.createdBy ?? "",
-            createdByName: data.createdByName ?? ""
+            createdByName: data.createdByName ?? "",
+            createdByPhotoURL: data.createdByPhotoURL ?? ""
           };
         });
         setMessages(items.filter((m) => m.text));
@@ -398,6 +887,7 @@ const App: React.FC = () => {
       text,
       createdBy: auth.currentUser?.email ?? "",
       createdByName: nickname.trim(),
+      createdByPhotoURL: profilePhotoUrl || "",
       createdAt: serverTimestamp()
     });
     setMessageInput("");
@@ -511,6 +1001,11 @@ const App: React.FC = () => {
     setIsSidebarOpen(false);
   };
 
+  const goToTopics = () => {
+    setMode("topics");
+    setIsSidebarOpen(false);
+  };
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setAdminAuthed(Boolean(user));
@@ -530,6 +1025,27 @@ const App: React.FC = () => {
       if (typeof unsub === "function") unsub();
     };
   }, [adminAuthed, mode]);
+
+  useEffect(() => {
+    if (!adminAuthed || mode !== "topics") return;
+    const unsub = subscribeTopics();
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, [adminAuthed, mode]);
+
+  useEffect(() => {
+    if (!editor) return;
+    if (!selectedTopicId) {
+      setTopicContent("");
+      editor.commands.setContent("");
+      return;
+    }
+    const node = topicNodes.find((n) => n.id === selectedTopicId);
+    const content = node?.content ?? "";
+    setTopicContent(content);
+    editor.commands.setContent(content || "", false);
+  }, [editor, selectedTopicId, topicNodes]);
 
   useEffect(() => {
     localStorage.setItem("belle_lang", lang);
@@ -1003,73 +1519,139 @@ const App: React.FC = () => {
     <div className="layout-container">
       <aside className={`sidebar ${isSidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
-          <button className="home-btn" onClick={goToHome}>
-            <Home size={18} />
-            {tr("홈", "Home", "主页")}
-          </button>
+          {mode === "topics" ? (
+            <button className="home-btn" onClick={goToHome}>
+              <ChevronRight size={18} />
+              {tr("뒤로가기", "Back", "返回")}
+            </button>
+          ) : (
+            <button className="home-btn" onClick={goToHome}>
+              <Home size={18} />
+              {tr("홈", "Home", "主页")}
+            </button>
+          )}
           <button className="close-btn" onClick={() => setIsSidebarOpen(false)}>
             <X size={24} />
           </button>
         </div>
-        <div className="sidebar-actions">
-          <button className="btn editor-btn" onClick={goToEditor}>
-            <Edit3 size={16} />
-            {tr("새 작업 (Editor)", "New Work (Editor)", "新建 (编辑器)")}
-          </button>
-          <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToRequest}>
-            <MessageSquarePlus size={16} />
-            {tr("신청곡", "Requests", "点歌")}
-          </button>
-          <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToMessage}>
-            <MessageSquarePlus size={16} />
-            {tr("상대에게 한마디", "Message", "对他说句话")}
-          </button>
-        </div>
-        <ul className="song-list">
-          {songs.map((song) => (
-            <li
-              key={song.id}
-              className={videoId === song.videoId ? "active" : ""}
-            >
-              <button onClick={() => loadSong(song)}>
-                {song.coverUrl ? (
-                  <img
-                    src={song.coverUrl}
-                    alt={song.title}
-                    className="song-cover"
-                  />
-                ) : (
-                  <div
-                    className="song-cover"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      background: "#E3D8C7",
-                      color: "#FFF"
-                    }}
-                  >
-                    <Music size={20} />
-                  </div>
-                )}
-                <span className="song-title">{song.title}</span>
+
+        {mode === "topics" ? (
+          <>
+            <div className="sidebar-actions">
+              <button className="btn editor-btn" onClick={() => createTopicNode("folder", selectedFolderId ?? null)}>
+                <FolderPlus size={16} />
+                {tr("새 폴더", "New folder", "新建文件夹")}
               </button>
-            </li>
-          ))}
-          {songs.length === 0 && (
-            <li className="empty-message">
-              <Music size={48} style={{ opacity: 0.2, marginBottom: 8 }} />
-              <br />
-              {tr("추가된 곡이 없습니다.", "No songs added.", "暂无歌曲。")}
-            </li>
-          )}
-        </ul>
-        <div className="sidebar-actions" style={{ marginTop: "auto" }}>
-          <button className="btn editor-btn" onClick={() => setShowSettings(true)}>
-            <Settings size={16} />
-            {tr("설정", "Settings", "设置")}
-          </button>
-        </div>
+              <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={() => createTopicNode("file", selectedFolderId ?? null)}>
+                <FilePlus size={16} />
+                {tr("새 노트", "New note", "新建笔记")}
+              </button>
+            </div>
+            <div style={{ padding: "0 12px 12px", overflowY: "auto" }}>
+              {topicsLoading ? (
+                <p className="label">{tr("불러오는 중...", "Loading...", "加载中...")}</p>
+              ) : topicNodes.length === 0 ? (
+                <p className="label">{tr("폴더나 노트를 만들어 주세요.", "Create a folder or note.", "请创建文件夹或笔记。")}</p>
+              ) : (
+                <ul className="song-list" style={{ marginTop: 0 }}>
+                  {topicNodes
+                        .filter((n) => n.parentId == null)
+                        .map((node) => (
+                          <TopicTreeNode
+                            key={node.id}
+                            node={node}
+                            nodes={topicNodes}
+                            expandedFolders={expandedFolders}
+                            toggleFolder={toggleFolder}
+                            selectTopic={selectTopic}
+                            selectedId={selectedTopicId}
+                            selectedFolderId={selectedFolderId}
+                            onSelectFolder={setSelectedFolderId}
+                            createTopicNode={createTopicNode}
+                            onRename={startRenameTopic}
+                            onDelete={deleteTopicNode}
+                            onMove={moveTopicNode}
+                            editingId={editingTopicId}
+                            editingName={editingTopicName}
+                            setEditingName={setEditingTopicName}
+                            onSaveRename={saveRenameTopic}
+                            onCancelRename={cancelRename}
+                            tr={tr}
+                            depth={0}
+                            onOpenContextMenu={openContextMenu}
+                          />
+                        ))}
+                </ul>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="sidebar-actions">
+              <button className="btn editor-btn" onClick={goToEditor}>
+                <Edit3 size={16} />
+                {tr("새 작업 (Editor)", "New Work (Editor)", "新建 (编辑器)")}
+              </button>
+              <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToRequest}>
+                <MessageSquarePlus size={16} />
+                {tr("신청곡", "Requests", "点歌")}
+              </button>
+              <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToMessage}>
+                <MessageSquarePlus size={16} />
+                {tr("상대에게 한마디", "Message", "对他说句话")}
+              </button>
+              <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToTopics}>
+                <FolderPlus size={16} />
+                {tr("오늘의 주제", "Daily Topics", "今日主题")}
+              </button>
+            </div>
+            <ul className="song-list">
+              {songs.map((song) => (
+                <li
+                  key={song.id}
+                  className={videoId === song.videoId ? "active" : ""}
+                >
+                  <button onClick={() => loadSong(song)}>
+                    {song.coverUrl ? (
+                      <img
+                        src={song.coverUrl}
+                        alt={song.title}
+                        className="song-cover"
+                      />
+                    ) : (
+                      <div
+                        className="song-cover"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "#E3D8C7",
+                          color: "#FFF"
+                        }}
+                      >
+                        <Music size={20} />
+                      </div>
+                    )}
+                    <span className="song-title">{song.title}</span>
+                  </button>
+                </li>
+              ))}
+              {songs.length === 0 && (
+                <li className="empty-message">
+                  <Music size={48} style={{ opacity: 0.2, marginBottom: 8 }} />
+                  <br />
+                  {tr("추가된 곡이 없습니다.", "No songs added.", "暂无歌曲。")}
+                </li>
+              )}
+            </ul>
+            <div className="sidebar-actions" style={{ marginTop: "auto" }}>
+              <button className="btn editor-btn" onClick={() => setShowSettings(true)}>
+                <Settings size={16} />
+                {tr("설정", "Settings", "设置")}
+              </button>
+            </div>
+          </>
+        )}
       </aside>
 
       {/* Main Content */}
@@ -1263,16 +1845,27 @@ const App: React.FC = () => {
                           maxWidth: "80%"
                         }}
                       >
-                        <div
-                          style={{
-                            background: mine ? "#D9C9B6" : "#F2F2F2",
-                            color: "#222",
-                            padding: "8px 12px",
-                            borderRadius: 12,
-                            whiteSpace: "pre-wrap"
-                          }}
-                        >
-                          {m.text}
+                        <div style={{ display: "flex", gap: 8, flexDirection: mine ? "row-reverse" : "row", alignItems: "flex-end" }}>
+                          {m.createdByPhotoURL ? (
+                            <img
+                              src={m.createdByPhotoURL}
+                              alt="avatar"
+                              style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
+                            />
+                          ) : (
+                            <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#eee" }} />
+                          )}
+                          <div
+                            style={{
+                              background: mine ? "#D9C9B6" : "#F2F2F2",
+                              color: "#222",
+                              padding: "8px 12px",
+                              borderRadius: 12,
+                              whiteSpace: "pre-wrap"
+                            }}
+                          >
+                            {m.text}
+                          </div>
                         </div>
                         <div className="label" style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>
                           {(m.createdByName || m.createdBy || tr("알 수 없음", "Unknown", "未知"))}
@@ -1289,10 +1882,130 @@ const App: React.FC = () => {
                   placeholder={tr("메시지를 입력하세요", "Type a message", "输入消息")}
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void sendMessage();
+                    }
+                  }}
                 />
                 <button className="btn primary" onClick={sendMessage}>
                   {tr("보내기", "Send", "发送")}
                 </button>
+              </div>
+            </motion.section>
+          )}
+
+          {mode === "topics" && (
+            <motion.section
+              key="topics"
+              className="panel"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+            >
+              <div className="row space" style={{ marginBottom: 8 }}>
+                <h2 style={{ margin: 0 }}>{tr("오늘의 주제", "Daily Topics", "今日主题")}</h2>
+                <div className="row" style={{ gap: 6 }}>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("bold"))} onClick={() => editor?.chain().focus().toggleBold().run()}>
+                    B
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("italic"))} onClick={() => editor?.chain().focus().toggleItalic().run()}>
+                    I
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("underline"))} onClick={() => editor?.chain().focus().toggleUnderline().run()}>
+                    U
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("strike"))} onClick={() => editor?.chain().focus().toggleStrike().run()}>
+                    S
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("bulletList"))} onClick={() => editor?.chain().focus().toggleBulletList().run()}>
+                    {tr("• 목록", "Bullets", "项目")}
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("orderedList"))} onClick={() => editor?.chain().focus().toggleOrderedList().run()}>
+                    {tr("1. 목록", "Numbered", "编号")}
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("taskList"))} onClick={() => editor?.chain().focus().toggleTaskList().run()}>
+                    {tr("체크", "Tasks", "任务")}
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("blockquote"))} onClick={() => editor?.chain().focus().toggleBlockquote().run()}>
+                    {tr("인용", "Quote", "引用")}
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("codeBlock"))} onClick={() => editor?.chain().focus().toggleCodeBlock().run()}>
+                    {tr("코드", "Code", "代码")}
+                  </button>
+                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("link"))} onClick={insertLink}>
+                    {tr("링크", "Link", "链接")}
+                  </button>
+                  <button className="btn small" onClick={insertImage}>
+                    {tr("이미지", "Image", "图片")}
+                  </button>
+                  <button className="btn small" onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
+                    {tr("표", "Table", "表格")}
+                  </button>
+                  <select
+                    className="input"
+                    style={{ width: 56, fontSize: 12, padding: "4px 6px" }}
+                    value={String(lineHeight)}
+                    onChange={(e) => updateLineHeight(Number(e.target.value))}
+                  >
+                    {Array.from({ length: 20 }, (_, i) => {
+                      const value = ((i + 1) / 10).toFixed(1);
+                      return (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, background: "#fff", minHeight: 360 }}>
+                {selectedTopicId ? (
+                  <div style={{ minHeight: 360 }}>
+                    <div
+                      onClick={() => editor?.chain().focus().run()}
+                      style={{
+                        minHeight: 360,
+                        padding: "8px 4px 12px",
+                        borderRadius: 0,
+                        background: "#fcfbf9",
+                        border: "none",
+                        borderBottom: "1px solid #e6e6e6",
+                        outline: "none"
+                      }}
+                    >
+                      <EditorContent
+                        editor={editor}
+                        style={{
+                          minHeight: 340,
+                          fontFamily: "\"Iowan Old Style\", \"Palatino Linotype\", \"Book Antiqua\", Palatino, serif",
+                          fontSize: 15,
+                          lineHeight
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : topicNodes.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "24px 12px" }}>
+                    <p className="label" style={{ marginBottom: 12 }}>
+                      {tr("폴더나 노트를 먼저 만들어 주세요.", "Create a folder or note first.", "请先创建文件夹或笔记。")}
+                    </p>
+                    <div className="row" style={{ justifyContent: "center", gap: 8 }}>
+                      <button className="btn small" onClick={() => createTopicNode("folder", null)}>
+                        <FolderPlus size={14} />
+                        {tr("새 폴더", "New folder", "新建文件夹")}
+                      </button>
+                      <button className="btn small" onClick={() => createTopicNode("file", null)}>
+                        <FilePlus size={14} />
+                        {tr("새 노트", "New note", "新建笔记")}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="label">{tr("왼쪽에서 노트를 선택하세요.", "Select a note on the left.", "请选择左侧的笔记。")}</p>
+                )}
               </div>
             </motion.section>
           )}
@@ -1712,6 +2425,32 @@ const App: React.FC = () => {
                   {tr("저장", "Save", "保存")}
                 </button>
               </div>
+              <p className="label" style={{ marginTop: 16, marginBottom: 8 }}>
+                {tr("프로필 사진", "Profile photo", "头像")}
+              </p>
+              <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                {profilePhotoUrl ? (
+                  <img
+                    src={profilePhotoUrl}
+                    alt="profile"
+                    style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }}
+                  />
+                ) : (
+                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#eee" }} />
+                )}
+                <label className="btn small" style={{ cursor: "pointer" }}>
+                  {tr("업로드", "Upload", "上传")}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void handleAvatarUpload(file);
+                    }}
+                  />
+                </label>
+              </div>
               {profileMessage && (
                 <p className="label" style={{ marginTop: 8, color: "#2E7D32" }}>
                   {profileMessage}
@@ -1728,6 +2467,83 @@ const App: React.FC = () => {
                 </button>
                 <button className="btn primary" onClick={completeOnboarding}>
                   {tr("닫기", "Close", "关闭")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {contextMenu && (
+          <div
+            className="modal"
+            onClick={closeContextMenu}
+            style={{ background: "transparent" }}
+          >
+            <div
+              style={{
+                position: "fixed",
+                top: contextMenu.y,
+                left: contextMenu.x,
+                background: "#ffffff",
+                border: "1px solid #e6e6e6",
+                borderRadius: 12,
+                padding: 8,
+                minWidth: 180,
+                zIndex: 9999,
+                boxShadow: "0 12px 28px rgba(0,0,0,0.14)",
+                backdropFilter: "blur(6px)"
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: "grid", gap: 6 }}>
+                {contextMenu.node.type === "folder" && (
+                  <>
+                    <button
+                      className="btn small"
+                      style={{ justifyContent: "flex-start" }}
+                      onClick={() => {
+                        createTopicNode("folder", contextMenu.node.id);
+                        closeContextMenu();
+                      }}
+                    >
+                      <FolderPlus size={14} />
+                      {tr("새 폴더", "New folder", "新建文件夹")}
+                    </button>
+                    <button
+                      className="btn small"
+                      style={{ justifyContent: "flex-start" }}
+                      onClick={() => {
+                        createTopicNode("file", contextMenu.node.id);
+                        closeContextMenu();
+                      }}
+                    >
+                      <FilePlus size={14} />
+                      {tr("새 노트", "New note", "新建笔记")}
+                    </button>
+                    <div style={{ height: 1, background: "#eee", margin: "2px 0" }} />
+                  </>
+                )}
+                <button
+                  className="btn small"
+                  style={{ justifyContent: "flex-start" }}
+                  onClick={() => {
+                    startRenameTopic(contextMenu.node);
+                    closeContextMenu();
+                  }}
+                >
+                  <Edit3 size={14} />
+                  {tr("이름 변경", "Rename", "重命名")}
+                </button>
+                <button
+                  className="btn small"
+                  style={{ justifyContent: "flex-start", color: "#B42318" }}
+                  onClick={() => {
+                    deleteTopicNode(contextMenu.node);
+                    closeContextMenu();
+                  }}
+                >
+                  <X size={14} />
+                  {tr("삭제", "Delete", "删除")}
                 </button>
               </div>
             </div>

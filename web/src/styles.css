@@ -577,3 +577,15 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+/* TipTap editor focus outline cleanup */
+.ProseMirror {
+  outline: none;
+  box-shadow: none;
+  border: none;
+}
+
+.ProseMirror:focus {
+  outline: none;
+  box-shadow: none;
+}
