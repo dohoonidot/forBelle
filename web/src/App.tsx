@@ -1,4 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { songs, Song } from "./songs";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Home,
+  X,
+  Menu,
+  Music,
+  Edit3,
+  PlayCircle,
+  Link as LinkIcon,
+  Download,
+  Upload,
+  CheckCircle,
+  AlertCircle,
+  MessageSquarePlus
+} from "lucide-react";
 
 type Cue = {
   startMs: number;
@@ -13,6 +29,8 @@ declare global {
     onYouTubeIframeAPIReady?: () => void;
   }
 }
+
+type AppMode = "home" | "editor" | "viewer" | "request";
 
 const POLL_MS = 150;
 
@@ -219,6 +237,98 @@ const App: React.FC = () => {
   const [vttUrl, setVttUrl] = useState("");
   const [lyricsUrl, setLyricsUrl] = useState("");
   const [shareMessage, setShareMessage] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // view mode vs editor mode (default: home)
+  const [mode, setMode] = useState<AppMode>("home");
+  const [requestUrl, setRequestUrl] = useState("");
+  const [requestSent, setRequestSent] = useState(false);
+  const [requests, setRequests] = useState<string[]>(() => {
+    const saved = localStorage.getItem("belle_requests");
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const saveRequest = (url: string) => {
+    const newRequests = [url, ...requests];
+    setRequests(newRequests);
+    localStorage.setItem("belle_requests", JSON.stringify(newRequests));
+  };
+
+  const removeRequest = (index: number) => {
+    const newRequests = requests.filter((_, i) => i !== index);
+    setRequests(newRequests);
+    localStorage.setItem("belle_requests", JSON.stringify(newRequests));
+  };
+
+  const goToHome = () => {
+    setVideoId(null);
+    setYoutubeUrl("");
+    setVttUrl("");
+    setLyricsUrl("");
+    setVttInput("");
+    setLyricsInput("");
+    setCues([]);
+    setMode("home");
+
+    // URL 초기화
+    window.history.pushState({}, "", window.location.pathname);
+    setIsSidebarOpen(false);
+  };
+
+  const goToEditor = () => {
+    setMode("editor");
+    setIsSidebarOpen(false);
+  };
+
+  const goToRequest = () => {
+    setMode("request");
+    setIsSidebarOpen(false);
+    setRequestUrl("");
+    setRequestSent(false);
+  };
+
+  const loadSong = (song: Song) => {
+    setVideoId(song.videoId);
+    setYoutubeUrl(`https://youtu.be/${song.videoId}`);
+    setVttUrl(song.vttUrl ?? "");
+    setLyricsUrl(song.lyricsUrl ?? "");
+
+    // 뷰어 모드로 전환
+    setMode("viewer");
+    setIsSidebarOpen(false); // 모바일에서 선택 후 닫기
+
+    // URL 업데이트
+    const url = new URL(window.location.href);
+    url.searchParams.set("v", song.videoId);
+    if (song.vttUrl) url.searchParams.set("vtt", song.vttUrl);
+    else url.searchParams.delete("vtt");
+    if (song.lyricsUrl) url.searchParams.set("lyrics", song.lyricsUrl);
+    else url.searchParams.delete("lyrics");
+    window.history.pushState({}, "", url.toString());
+
+    // 데이터 로드
+    (async () => {
+      try {
+        const [vttText, lyricsText] = await Promise.all([
+          song.vttUrl ? fetchText(song.vttUrl) : Promise.resolve(""),
+          song.lyricsUrl ? fetchText(song.lyricsUrl) : Promise.resolve("")
+        ]);
+        if (vttText) setVttInput(vttText);
+        if (lyricsText) setLyricsInput(lyricsText);
+        if (vttText) parseAndMap(vttText, lyricsText);
+      } catch {
+        setParseError("Failed to load song data.");
+      }
+    })();
+
+    // 모바일에서 사이드바 닫기
+    setIsSidebarOpen(false);
+  };
+
+  const fetchText = async (url: string) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`fetch_failed:${url}`);
+    return res.text();
+  };
 
   const exportProject = () => {
     const payload = {
@@ -335,7 +445,7 @@ const App: React.FC = () => {
 
     const createPlayer = () => {
       if (playerRef.current) {
-        playerRef.current.loadVideoById(videoId);
+        playerRef.current.cueVideoById(videoId);
         return;
       }
       playerRef.current = new window.YT.Player(playerHostRef.current, {
@@ -560,7 +670,7 @@ const App: React.FC = () => {
         ]);
         if (vttText) setVttInput(vttText);
         if (lyricsText) setLyricsInput(lyricsText);
-        if (vttText) parseAndMap(vttText, lyricsText);
+        // if (vttText) parseAndMap(vttText, lyricsText); // 초기 로딩 시 파싱은 선택사항
       } catch {
         setParseError("외부 자막/가사 불러오기 실패. URL과 CORS 설정을 확인하세요.");
       }
@@ -568,260 +678,562 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <div className="page">
-      <header className="header">
-        <div>
-          <h1>只屬於我最愛的 Belle 的空間</h1>
-          <p>我們的歌，我們的時間</p>
-        </div>
-      </header>
-
-      <section className="panel">
-        <div className="row">
-          <input
-            className="input"
-            placeholder="YouTube 링크"
-            value={youtubeUrl}
-            onChange={(e) => setYoutubeUrl(e.target.value)}
-          />
-          <button className="btn" onClick={onLoadYoutube}>
-            영상 불러오기
+    <div className="layout-container">
+      <aside className={`sidebar ${isSidebarOpen ? "open" : ""}`}>
+        <div className="sidebar-header">
+          <button className="home-btn" onClick={goToHome}>
+            <Home size={18} />
+            Home
+          </button>
+          <button className="close-btn" onClick={() => setIsSidebarOpen(false)}>
+            <X size={24} />
           </button>
         </div>
-        <div className="player" ref={playerHostRef} />
-      </section>
-
-      <section className="panel display">
-        <div className="lyrics">
-          <div className="line prev">
-            {activeIndex > 0
-              ? cues[activeIndex - 1]?.twText ?? cues[activeIndex - 1]?.text
-              : ""}
-          </div>
-          <div className="line current">
-            {activeCue ? activeCue.twText ?? activeCue.text : "재생 중..."}
-            {debugTimes && activeCue && (
-              <div className="time">{formatMs(activeCue.startMs)} - {formatMs(activeCue.endMs)}</div>
-            )}
-          </div>
-          <div className="line next">
-            {activeIndex >= 0 && activeIndex < cues.length - 1
-              ? cues[activeIndex + 1]?.twText ?? cues[activeIndex + 1]?.text
-              : ""}
-          </div>
-        </div>
-      </section>
-
-      <section className="panel grid">
-        <div>
-          <label className="label">대만어 가사 (줄 단위)</label>
-          <textarea
-            className="textarea"
-            value={lyricsInput}
-            onChange={(e) => setLyricsInput(e.target.value)}
-            placeholder="예)\n你好\n阮的心" 
-          />
-          <input
-            type="file"
-            accept=".txt,.lrc"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) readFileToText(file, setLyricsInput);
-            }}
-          />
-        </div>
-        <div>
-          <label className="label">타임코드 자막 (VTT/SRT)</label>
-          <textarea
-            className="textarea"
-            value={vttInput}
-            onChange={(e) => setVttInput(e.target.value)}
-            placeholder="WEBVTT... 또는 SRT" 
-          />
-          <input
-            type="file"
-            accept=".vtt,.srt,.txt"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) readFileToText(file, setVttInput);
-            }}
-          />
-        </div>
-      </section>
-
-      <section className="panel actions">
-        <button className="btn primary" onClick={applyParsing}>
-          파싱 & 자동 매핑
-        </button>
-        <div className="row">
-          <button className="btn" onClick={exportProject}>
-            프로젝트 내보내기(JSON)
+        <div className="sidebar-actions">
+          <button className="btn editor-btn" onClick={goToEditor}>
+            <Edit3 size={16} />
+            새 작업 (Editor)
           </button>
-          <input
-            type="file"
-            accept=".json"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) importProject(file);
-            }}
-          />
-        </div>
-        <div className="row">
-          <label className="label">전체 오프셋: {globalOffsetMs}ms</label>
-          <input
-            type="range"
-            min={-3000}
-            max={3000}
-            step={100}
-            value={globalOffsetMs}
-            onChange={(e) => setGlobalOffsetMs(Number(e.target.value))}
-          />
-        </div>
-        <div className="row">
-          <button className="btn" onClick={() => adjustCurrentCue(-100)}>
-            현재 줄 -0.1s
-          </button>
-          <button className="btn" onClick={() => adjustCurrentCue(100)}>
-            현재 줄 +0.1s
-          </button>
-          <button
-            className="btn"
-            onClick={() => seekToCue(Math.max(0, activeIndex - 1))}
-          >
-            이전 줄로 이동
-          </button>
-          <button
-            className="btn"
-            onClick={() =>
-              seekToCue(Math.min(cues.length - 1, activeIndex + 1))
-            }
-          >
-            다음 줄로 이동
-          </button>
-          <button
-            className="btn"
-            onClick={() => setDebugTimes((v) => !v)}
-          >
-            디버그 시간 {debugTimes ? "ON" : "OFF"}
+          <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToRequest}>
+            <MessageSquarePlus size={16} />
+            申請歌曲
           </button>
         </div>
-        {parseError && <p className="error">{parseError}</p>}
-      </section>
-
-      <section className="panel actions">
-        <h2>공유 링크 생성</h2>
-        <p className="label">
-          VTT/SRT와 가사를 공개 URL에 올린 뒤 링크만 공유하면 자동으로 자막이 로딩됩니다.
-        </p>
-        <div className="row">
-          <input
-            className="input"
-            placeholder="VTT/SRT 공개 URL"
-            value={vttUrl}
-            onChange={(e) => setVttUrl(e.target.value)}
-          />
-          <input
-            className="input"
-            placeholder="가사 TXT URL (선택)"
-            value={lyricsUrl}
-            onChange={(e) => setLyricsUrl(e.target.value)}
-          />
-          <button className="btn primary" onClick={copyShareLink}>
-            링크 복사
-          </button>
-        </div>
-        <div className="row">
-          <input
-            className="input"
-            readOnly
-            value={shareLink}
-            placeholder="여기에 공유 링크가 표시됩니다."
-          />
-        </div>
-        {shareMessage && <p className="error">{shareMessage}</p>}
-      </section>
-
-      <section className="panel actions">
-        <h2>수동 타이밍 (Whisper 없이)</h2>
-        <p className="label">
-          재생 중에 탭을 눌러 줄별 시작/끝 시간을 기록합니다. 첫 번째 탭은 1줄 시작,
-          이후 탭은 현재 줄 종료 + 다음 줄 시작으로 처리됩니다.
-        </p>
-        <div className="row">
-          <button className="btn" onClick={startManualSync}>
-            수동 타이밍 시작
-          </button>
-          <button className="btn primary" onClick={tapManualSync} disabled={!manualActive}>
-            탭/다음 줄
-          </button>
-          <button className="btn" onClick={applyManualCues}>
-            수동 결과 적용
-          </button>
-        </div>
-        {manualCues.length > 0 && (
-          <div className="row">
-            <span className="label">
-              진행: {manualIndex + 1} / {manualCues.length}
-            </span>
-            <span className="label">
-              현재 줄: {manualCues[manualIndex]?.twText ?? ""}
-            </span>
-          </div>
-        )}
-        {manualMessage && <p className="error">{manualMessage}</p>}
-      </section>
-
-      <section className="panel list">
-        <div className="row space">
-          <h2>매핑 결과</h2>
-          <div className="row">
-            <button className="btn" onClick={() => downloadText("lyrics.vtt", toVtt(cues))}>
-              VTT 다운로드
-            </button>
-            <button className="btn" onClick={() => downloadText("lyrics.lrc", toLrc(cues))}>
-              LRC 다운로드
-            </button>
-          </div>
-        </div>
-        <div className="cue-list">
-          {cues.map((cue, idx) => (
-            <div key={`${cue.startMs}-${idx}`} className={`cue ${idx === activeIndex ? "active" : ""}`}>
-              <div className="cue-time">
-                {formatMs(cue.startMs)} → {formatMs(cue.endMs)}
-              </div>
-              <div className="cue-text">
-                {(cue.twText ?? cue.text).split("\n").map((line, i) => (
-                  <div key={i}>{line}</div>
-                ))}
-              </div>
-              <button className="btn small" onClick={() => selectEdit(idx)}>
-                텍스트 수정
+        <ul className="song-list">
+          {songs.map((song) => (
+            <li
+              key={song.id}
+              className={videoId === song.videoId ? "active" : ""}
+            >
+              <button onClick={() => loadSong(song)}>
+                {song.coverUrl ? (
+                  <img
+                    src={song.coverUrl}
+                    alt={song.title}
+                    className="song-cover"
+                  />
+                ) : (
+                  <div
+                    className="song-cover"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: "#E3D8C7",
+                      color: "#FFF"
+                    }}
+                  >
+                    <Music size={20} />
+                  </div>
+                )}
+                <span className="song-title">{song.title}</span>
               </button>
-            </div>
+            </li>
           ))}
-        </div>
-      </section>
+          {songs.length === 0 && (
+            <li className="empty-message">
+              <Music size={48} style={{ opacity: 0.2, marginBottom: 8 }} />
+              <br />
+              No songs added.
+            </li>
+          )}
+        </ul>
+      </aside>
 
-      {editIndex !== null && (
-        <div className="modal">
-          <div className="modal-body">
-            <h3>텍스트 수정</h3>
-            <textarea
-              className="textarea"
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-            />
-            <div className="row">
-              <button className="btn primary" onClick={applyEdit}>
-                적용
-              </button>
-              <button className="btn" onClick={() => setEditIndex(null)}>
-                취소
-              </button>
+      {/* Main Content */}
+      <div className="main-content">
+        <header className="header">
+          <button className="menu-btn" onClick={() => setIsSidebarOpen(true)}>
+            <Menu size={24} />
+          </button>
+          <div
+            className="header-text"
+            onClick={goToHome}
+            style={{ cursor: "pointer" }}
+          >
+            <h1>只屬於我最愛的 Belle 的空間</h1>
+            <p>我們的歌，我們的時間</p>
+          </div>
+        </header>
+
+        <AnimatePresence mode="wait">
+          {mode === "home" && (
+            <motion.section
+              key="home"
+              className="panel welcome-screen"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.5 }}
+            >
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+              >
+                <Music size={64} style={{ color: "#D4B996", marginBottom: 24 }} />
+              </motion.div>
+              <h2>歡迎光臨！</h2>
+              <p>之後我會再持續更新的。</p>
+              <p>請繼續關注喔，謝謝你。</p>
+              <p style={{ marginTop: 16, fontWeight: 500 }}>我是 good boy。</p>
+            </motion.section>
+          )}
+
+          {mode === "request" && (
+            <motion.section
+              key="request"
+              className="panel welcome-screen"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+            >
+              <h2 style={{ marginBottom: 24 }}>申請歌曲</h2>
+              <p style={{ marginBottom: 24 }}>請輸入你想要的歌曲的 YouTube 影片網址。</p>
+
+              <div className="row" style={{ width: "100%", maxWidth: 600 }}>
+                <input
+                  className="input"
+                  placeholder="YouTube URL..."
+                  value={requestUrl}
+                  onChange={(e) => setRequestUrl(e.target.value)}
+                />
+                <button
+                  className="btn primary"
+                  onClick={() => {
+                    if (requestUrl.trim()) {
+                      saveRequest(requestUrl.trim());
+                      setRequestSent(true);
+                      setRequestUrl("");
+                      setTimeout(() => setRequestSent(false), 3000);
+                    }
+                  }}
+                >
+                  送出
+                </button>
+              </div>
+              {requestSent && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  style={{
+                    marginTop: 16,
+                    padding: "12px 24px",
+                    background: "#E8F5E9",
+                    color: "#2E7D32",
+                    borderRadius: 12,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8
+                  }}
+                >
+                  <CheckCircle size={18} />
+                  已收到申請！
+                </motion.div>
+              )}
+            </motion.section>
+          )}
+
+          {mode === "editor" && (
+            <motion.section
+              key="editor-input"
+              className="panel"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+            >
+              <div className="row">
+                <input
+                  className="input"
+                  placeholder="YouTube 링크"
+                  value={youtubeUrl}
+                  onChange={(e) => setYoutubeUrl(e.target.value)}
+                />
+                <button className="btn" onClick={onLoadYoutube}>
+                  <PlayCircle size={18} />
+                  영상 불러오기
+                </button>
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
+
+        <motion.section
+          className={`panel display ${!videoId ? "hidden" : ""}`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: videoId ? 1 : 0 }}
+          layout
+        >
+          <div className="player" ref={playerHostRef} />
+        </motion.section>
+
+        <motion.section
+          className={`panel display ${!videoId ? "hidden" : ""}`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: videoId ? 1 : 0 }}
+          layout
+        >
+          <div className="lyrics">
+            <div className="line prev">
+              {activeIndex > 0
+                ? cues[activeIndex - 1]?.twText ?? cues[activeIndex - 1]?.text
+                : ""}
+            </div>
+            <div className="line current">
+              {activeCue ? activeCue.twText ?? activeCue.text : "재생 중..."}
+              {debugTimes && activeCue && (
+                <div className="time">{formatMs(activeCue.startMs)} - {formatMs(activeCue.endMs)}</div>
+              )}
+            </div>
+            <div className="line next">
+              {activeIndex >= 0 && activeIndex < cues.length - 1
+                ? cues[activeIndex + 1]?.twText ?? cues[activeIndex + 1]?.text
+                : ""}
             </div>
           </div>
-        </div>
-      )}
+        </motion.section>
+
+        {mode === "editor" && (
+          <motion.section
+            className="panel grid"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+          >
+            <div>
+              <label className="label">
+                <Music size={14} style={{ display: "inline", marginRight: 4 }} />
+                대만어 가사 (줄 단위)
+              </label>
+              <textarea
+                className="textarea"
+                value={lyricsInput}
+                onChange={(e) => setLyricsInput(e.target.value)}
+                placeholder="예)\n你好\n阮的心"
+              />
+              <div className="row" style={{ marginTop: 8 }}>
+                <label className="btn small" style={{ width: "100%", cursor: "pointer" }}>
+                  <Upload size={14} />
+                  파일 업로드
+                  <input
+                    type="file"
+                    accept=".txt,.lrc"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) readFileToText(file, setLyricsInput);
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+            <div>
+              <label className="label">
+                <CheckCircle size={14} style={{ display: "inline", marginRight: 4 }} />
+                타임코드 자막 (VTT/SRT)
+              </label>
+              <textarea
+                className="textarea"
+                value={vttInput}
+                onChange={(e) => setVttInput(e.target.value)}
+                placeholder="WEBVTT... 또는 SRT"
+              />
+              <div className="row" style={{ marginTop: 8 }}>
+                <label className="btn small" style={{ width: "100%", cursor: "pointer" }}>
+                  <Upload size={14} />
+                  파일 업로드
+                  <input
+                    type="file"
+                    accept=".vtt,.srt,.txt"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) readFileToText(file, setVttInput);
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+          </motion.section>
+        )}
+
+        {mode === "editor" && (
+          <motion.section
+            className="panel actions"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+          >
+            <h2>수동 타이밍 (Whisper 없이)</h2>
+            <p className="label">
+              재생 중에 탭을 눌러 줄별 시작/끝 시간을 기록합니다.
+            </p>
+            <div className="row">
+              <button className="btn" onClick={startManualSync}>
+                <PlayCircle size={16} />
+                수동 타이밍 시작
+              </button>
+              <button
+                className="btn primary"
+                onClick={tapManualSync}
+                disabled={!manualActive}
+              >
+                <CheckCircle size={16} />
+                탭/다음 줄
+              </button>
+              <button className="btn" onClick={applyManualCues}>
+                <CheckCircle size={16} />
+                수동 결과 적용
+              </button>
+            </div>
+            {manualCues.length > 0 && (
+              <div className="row">
+                <span className="label">
+                  진행: {manualIndex + 1} / {manualCues.length}
+                </span>
+                <span className="label">
+                  현재 줄: {manualCues[manualIndex]?.twText ?? ""}
+                </span>
+              </div>
+            )}
+            {manualMessage && (
+              <p className="error">
+                <AlertCircle size={14} style={{ display: "inline", marginRight: 4 }} />
+                {manualMessage}
+              </p>
+            )}
+          </motion.section>
+        )}
+
+        {/* Actions Panel - Editor Only */}
+        {/* Actions Panel - Editor Only */}
+        {mode === "editor" && (
+          <motion.section
+            className="panel actions"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <button className="btn primary" onClick={applyParsing}>
+              <PlayCircle size={16} />
+              파싱 & 자동 매핑
+            </button>
+            <div className="row" style={{ marginTop: 16 }}>
+              <button className="btn" onClick={exportProject}>
+                <Download size={16} />
+                프로젝트 내보내기(JSON)
+              </button>
+              <label className="btn" style={{ cursor: "pointer" }}>
+                <Upload size={16} />
+                프로젝트 불러오기
+                <input
+                  type="file"
+                  accept=".json"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) importProject(file);
+                  }}
+                />
+              </label>
+            </div>
+            <div className="row">
+              <label className="label">전체 오프셋: {globalOffsetMs}ms</label>
+              <input
+                type="range"
+                min={-3000}
+                max={3000}
+                step={100}
+                value={globalOffsetMs}
+                onChange={(e) => setGlobalOffsetMs(Number(e.target.value))}
+                style={{ flex: 1 }}
+              />
+            </div>
+            <div className="row">
+              <button className="btn" onClick={() => adjustCurrentCue(-100)}>
+                -0.1s
+              </button>
+              <button className="btn" onClick={() => adjustCurrentCue(100)}>
+                +0.1s
+              </button>
+              <button
+                className="btn"
+                onClick={() => seekToCue(Math.max(0, activeIndex - 1))}
+              >
+                이전 줄
+              </button>
+              <button
+                className="btn"
+                onClick={() =>
+                  seekToCue(Math.min(cues.length - 1, activeIndex + 1))
+                }
+              >
+                다음 줄
+              </button>
+              <button
+                className="btn"
+                onClick={() => setDebugTimes((v) => !v)}
+              >
+                디버그: {debugTimes ? "ON" : "OFF"}
+              </button>
+            </div>
+            {parseError && (
+              <p className="error">
+                <AlertCircle size={14} style={{ display: "inline", marginRight: 4 }} />
+                {parseError}
+              </p>
+            )}
+            {/* Request List - Editor Only */}
+            <div style={{ marginTop: 24, padding: 16, background: "#f9f9f9", borderRadius: 12 }}>
+              <div className="row space">
+                <h3>💌 신청곡 목록 ({requests.length})</h3>
+                <span className="label" style={{ fontSize: 12 }}>로컬 저장소 (이 브라우저에서만 보임)</span>
+              </div>
+              {requests.length === 0 ? (
+                <p className="label">아직 신청곡이 없습니다.</p>
+              ) : (
+                <ul className="song-list" style={{ maxHeight: 200, overflowY: "auto" }}>
+                  {requests.map((req, idx) => (
+                    <li key={idx} style={{ background: "#fff", padding: 8, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span className="song-title" style={{ fontSize: 13, wordBreak: "break-all" }}>{req}</span>
+                      <div className="row" style={{ gap: 4, margin: 0 }}>
+                        <button className="btn small" onClick={() => setYoutubeUrl(req)}>
+                          <PlayCircle size={14} />
+                        </button>
+                        <button className="btn small" onClick={() => {
+                          navigator.clipboard.writeText(req);
+                        }}>
+                          <LinkIcon size={14} />
+                        </button>
+                        <button className="btn small" onClick={() => removeRequest(idx)}>
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </motion.section>
+        )}
+
+        {/* Share Actions - Editor Only */}
+        {mode === "editor" && (
+          <motion.section
+            className="panel actions"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4 }}
+          >
+            <h2>공유 링크 생성</h2>
+            <p className="label">
+              VTT/SRT와 가사를 공개 URL에 올린 뒤 링크만 공유하면 자동으로 자막이 로딩됩니다.
+            </p>
+            <div className="row">
+              <input
+                className="input"
+                placeholder="VTT/SRT 공개 URL"
+                value={vttUrl}
+                onChange={(e) => setVttUrl(e.target.value)}
+              />
+              <input
+                className="input"
+                placeholder="가사 TXT URL (선택)"
+                value={lyricsUrl}
+                onChange={(e) => setLyricsUrl(e.target.value)}
+              />
+              <button className="btn primary" onClick={copyShareLink}>
+                <LinkIcon size={16} />
+                링크 복사
+              </button>
+            </div>
+            <div className="row">
+              <input
+                className="input"
+                readOnly
+                value={shareLink}
+                placeholder="여기에 공유 링크가 표시됩니다."
+              />
+            </div>
+            {shareMessage && (
+              <p className="error" style={{ background: "#E8F5E9", color: "#2E7D32" }}>
+                <CheckCircle size={14} style={{ display: "inline", marginRight: 4 }} />
+                {shareMessage}
+              </p>
+            )}
+          </motion.section>
+        )}
+
+
+
+        {/* Mapping Results - Hidden in View Mode unless cues exist, but buttons hidden */}
+
+
+        {/* Mapping Results - Editor Only */}
+        {mode === "editor" && (
+          <motion.section
+            className="panel list"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+          >
+            <div className="row space">
+              <h2>매핑 결과</h2>
+              <div className="row">
+                <button className="btn" onClick={() => downloadText("lyrics.vtt", toVtt(cues))}>
+                  VTT 다운로드
+                </button>
+                <button className="btn" onClick={() => downloadText("lyrics.lrc", toLrc(cues))}>
+                  LRC 다운로드
+                </button>
+              </div>
+            </div>
+            <div className="cue-list">
+              {cues.map((cue, idx) => (
+                <div key={`${cue.startMs}-${idx}`} className={`cue ${idx === activeIndex ? "active" : ""}`}>
+                  <div className="cue-time">
+                    {formatMs(cue.startMs)} → {formatMs(cue.endMs)}
+                  </div>
+                  <div className="cue-text">
+                    {(cue.twText ?? cue.text).split("\n").map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                  </div>
+                  <button className="btn small" onClick={() => selectEdit(idx)}>
+                    텍스트 수정
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.section>
+        )}
+
+
+        {
+          editIndex !== null && (
+            <div className="modal">
+              <div className="modal-body">
+                <h3>텍스트 수정</h3>
+                <textarea
+                  className="textarea"
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                />
+                <div className="row">
+                  <button className="btn primary" onClick={applyEdit}>
+                    적용
+                  </button>
+                  <button className="btn" onClick={() => setEditIndex(null)}>
+                    취소
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        }
+
+        {isSidebarOpen && <div className="overlay" onClick={() => setIsSidebarOpen(false)} />}
+      </div>
     </div>
   );
 };
