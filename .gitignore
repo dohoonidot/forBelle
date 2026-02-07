@@ -1,0 +1,4 @@
+.venv/
+.ssh_github
+.ssh_github.pub
+web/node_modules/
