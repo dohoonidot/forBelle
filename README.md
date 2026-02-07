@@ -1,5 +1,8 @@
 # TW Lyrics Sync
 
+## 🌐 접속 주소 (Home)
+**[https://dohoonidot.github.io/forBelle/](https://dohoonidot.github.io/forBelle/)**
+
 YouTube 링크 + 대만어 가사만으로 빠르게 싱크 맞추는 정적 웹앱 + 로컬 도구 가이드.
 
 ## 핵심 아이디어
@@ -19,13 +22,13 @@ npm run dev
 ```
 브라우저에서 출력된 URL 접속.
 
-## GitHub Pages 배포
+## GitHub Pages 배포 (main /docs)
+GitHub Pages Source를 `main /docs`로 설정하고, 빌드 결과를 `docs/`에 출력합니다.
 ```bash
 cd web
-npm install
 npm run build
 ```
-`web/dist`를 GitHub Pages로 배포하세요. (base는 `./`로 설정됨)
+그 다음 `docs/`를 커밋/푸시하면 `https://dohoonidot.github.io/forBelle/` 에 반영됩니다.
 
 ## 사용 방법
 1) YouTube 링크 입력 후 "영상 불러오기"
