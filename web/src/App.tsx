@@ -495,11 +495,11 @@ const App: React.FC = () => {
   } | null>(null);
   const initializingTopicsRef = useRef(false);
   const saveTopicTimer = useRef<number | null>(null);
-  const [adminEmailInput, setAdminEmailInput] = useState("belle@kim.com");
+  const [adminEmailInput, setAdminEmailInput] = useState(() => localStorage.getItem("belle_user_email") || "belle@kim.com");
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
   const [adminError, setAdminError] = useState<string | null>(null);
-  const [adminAuthed, setAdminAuthed] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [adminAuthed, setAdminAuthed] = useState(() => localStorage.getItem("belle_simple_authed") === "true");
+  const [authLoading, setAuthLoading] = useState(false);
   const [lang, setLang] = useState<Lang>(() => {
     const saved = localStorage.getItem("belle_lang");
     if (saved === "ko" || saved === "en" || saved === "zh") return saved;
@@ -1008,25 +1008,46 @@ const App: React.FC = () => {
   };
 
   const handleAdminLogin = async () => {
-    if (!firebaseReady || !auth) {
-      setAdminError(tr("Firebase 연동 설정(.env)이 필요합니다.", "Firebase configuration (.env) required.", "需要配置 Firebase (.env)。"));
-      return;
-    }
     const email = adminEmailInput.trim();
+    const password = adminPasswordInput.trim();
     if (!email) {
       setAdminError(tr("이메일을 선택하세요.", "Select an email.", "请选择邮箱。"));
       return;
     }
-    try {
-      await signInWithEmailAndPassword(auth, email, adminPasswordInput);
+
+    // 둘만의 간편 비밀번호 인증: 250923
+    if (password === "250923") {
+      setAdminAuthed(true);
+      localStorage.setItem("belle_simple_authed", "true");
+      localStorage.setItem("belle_user_email", email);
       setAdminPasswordInput("");
       setAdminError(null);
-    } catch {
-      setAdminError(tr("비밀번호가 맞지 않습니다.", "Incorrect password.", "密码不正确。"));
+      setMode("home");
+      return;
     }
+
+    // Firebase Auth 설정 시 Firebase 인증도 지원
+    if (firebaseReady && auth) {
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        setAdminAuthed(true);
+        localStorage.setItem("belle_simple_authed", "true");
+        localStorage.setItem("belle_user_email", email);
+        setAdminPasswordInput("");
+        setAdminError(null);
+        setMode("home");
+        return;
+      } catch {
+        // fall through
+      }
+    }
+
+    setAdminError(tr("비밀번호가 맞지 않습니다.", "Incorrect password.", "密码不正确。"));
   };
 
   const handleAdminLogout = async () => {
+    localStorage.removeItem("belle_simple_authed");
+    localStorage.removeItem("belle_user_email");
     if (auth) {
       try {
         await signOut(auth);
@@ -1079,16 +1100,26 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    if (localStorage.getItem("belle_simple_authed") === "true") {
+      setAdminAuthed(true);
+      setAuthLoading(false);
+      return;
+    }
     if (!firebaseReady || !auth) {
       setAuthLoading(false);
       return;
     }
     const unsub = onAuthStateChanged(auth, (user) => {
-      setAdminAuthed(Boolean(user));
-      setAuthLoading(false);
       if (user) {
+        setAdminAuthed(true);
+        setAuthLoading(false);
         setMode("home");
         void loadProfile(user.uid);
+      } else {
+        if (localStorage.getItem("belle_simple_authed") !== "true") {
+          setAdminAuthed(false);
+        }
+        setAuthLoading(false);
       }
     });
     return () => unsub();
@@ -1568,9 +1599,12 @@ const App: React.FC = () => {
               <input
                 className="input"
                 type="password"
-                placeholder={tr("관리자 비밀번호", "Admin password", "管理员密码")}
+                placeholder={tr("비밀번호 입력", "Password", "输入密码")}
                 value={adminPasswordInput}
                 onChange={(e) => setAdminPasswordInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdminLogin();
+                }}
               />
               <button className="btn primary" onClick={handleAdminLogin}>
                 {tr("로그인", "Login", "登录")}
@@ -2098,7 +2132,8 @@ const App: React.FC = () => {
                   <p className="label">{tr("아직 메시지가 없습니다.", "No messages yet.", "还没有消息。")}</p>
                 ) : (
                   messages.map((m) => {
-                    const mine = m.createdBy === auth.currentUser?.email;
+                    const currentUserEmail = auth?.currentUser?.email || localStorage.getItem("belle_user_email");
+                    const mine = Boolean(m.createdBy && m.createdBy === currentUserEmail);
                     return (
                       <div
                         key={m.id}
