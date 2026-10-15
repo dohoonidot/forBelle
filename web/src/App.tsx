@@ -3,7 +3,7 @@ import { songs, Song } from "./songs";
 import { motion, AnimatePresence } from "framer-motion";
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, writeBatch, where } from "firebase/firestore";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { auth, db, storage } from "./firebase";
+import { auth, db, storage, isFirebaseConfigured } from "./firebase";
 import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -513,11 +513,7 @@ const App: React.FC = () => {
   const [lineHeight, setLineHeight] = useState(0.5);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
 
-  const firebaseReady =
-    Boolean(import.meta.env.VITE_FIREBASE_API_KEY) &&
-    Boolean(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) &&
-    Boolean(import.meta.env.VITE_FIREBASE_PROJECT_ID) &&
-    Boolean(import.meta.env.VITE_FIREBASE_APP_ID);
+  const firebaseReady = isFirebaseConfigured && Boolean(auth && db);
   const tr = (ko: string, en: string, zh: string) => {
     if (lang === "en") return en;
     if (lang === "zh") return zh;
@@ -1012,6 +1008,10 @@ const App: React.FC = () => {
   };
 
   const handleAdminLogin = async () => {
+    if (!firebaseReady || !auth) {
+      setAdminError(tr("Firebase 연동 설정(.env)이 필요합니다.", "Firebase configuration (.env) required.", "需要配置 Firebase (.env)。"));
+      return;
+    }
     const email = adminEmailInput.trim();
     if (!email) {
       setAdminError(tr("이메일을 선택하세요.", "Select an email.", "请选择邮箱。"));
@@ -1027,7 +1027,13 @@ const App: React.FC = () => {
   };
 
   const handleAdminLogout = async () => {
-    await signOut(auth);
+    if (auth) {
+      try {
+        await signOut(auth);
+      } catch (err) {
+        console.warn("Logout error:", err);
+      }
+    }
     setAdminAuthed(false);
     setRequests([]);
     setNickname("");
@@ -1073,6 +1079,10 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!firebaseReady || !auth) {
+      setAuthLoading(false);
+      return;
+    }
     const unsub = onAuthStateChanged(auth, (user) => {
       setAdminAuthed(Boolean(user));
       setAuthLoading(false);
@@ -1082,7 +1092,7 @@ const App: React.FC = () => {
       }
     });
     return () => unsub();
-  }, []);
+  }, [firebaseReady]);
 
   useEffect(() => {
     if (!adminAuthed || mode !== "message") return;
