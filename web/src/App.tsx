@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { songs, Song } from "./songs";
 import { motion, AnimatePresence } from "framer-motion";
 import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, writeBatch, where } from "firebase/firestore";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { auth, db, storage, isFirebaseConfigured } from "./firebase";
+import CharacterWorld from "./CharacterWorld";
 import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -39,7 +41,14 @@ import {
   Calendar,
   MapPin,
   Sparkles,
-  Maximize2
+  Maximize2,
+  Images,
+  MessageCircleQuestion,
+  SlidersHorizontal,
+  Smartphone,
+  ArrowUpRight,
+  LockKeyhole,
+  PawPrint
 } from "lucide-react";
 
 type Cue = {
@@ -92,7 +101,7 @@ declare global {
   }
 }
 
-type AppMode = "home" | "editor" | "viewer" | "request" | "message" | "topics";
+type AppMode = "home" | "editor" | "viewer" | "request" | "message" | "topics" | "characters";
 type Lang = "ko" | "en" | "zh";
 
 type TopicTreeProps = {
@@ -498,8 +507,11 @@ const App: React.FC = () => {
   const [adminEmailInput, setAdminEmailInput] = useState(() => localStorage.getItem("belle_user_email") || "belle@kim.com");
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
   const [adminError, setAdminError] = useState<string | null>(null);
-  const [adminAuthed, setAdminAuthed] = useState(() => localStorage.getItem("belle_simple_authed") === "true");
-  const [authLoading, setAuthLoading] = useState(false);
+  const [adminAuthed, setAdminAuthed] = useState(false);
+  // Wait for Firebase to restore its browser-local session before deciding
+  // whether to show the login screen. This enables reliable auto-login on
+  // each phone/PC after the first successful sign-in.
+  const [authLoading, setAuthLoading] = useState(true);
   const [lang, setLang] = useState<Lang>(() => {
     const saved = localStorage.getItem("belle_lang");
     if (saved === "ko" || saved === "en" || saved === "zh") return saved;
@@ -512,6 +524,7 @@ const App: React.FC = () => {
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [lineHeight, setLineHeight] = useState(0.5);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [upcomingPreviewId, setUpcomingPreviewId] = useState<string | null>(null);
 
   const firebaseReady = isFirebaseConfigured && Boolean(auth && db);
   const tr = (ko: string, en: string, zh: string) => {
@@ -519,6 +532,54 @@ const App: React.FC = () => {
     if (lang === "zh") return zh;
     return ko;
   };
+
+  const upcomingFeatures = [
+    {
+      id: "gallery",
+      icon: Images,
+      step: tr("다음 업데이트", "Next update", "下次更新"),
+      title: tr("우리의 추억 갤러리", "Our memory gallery", "我们的回忆相册"),
+      description: tr(
+        "사진을 날짜와 여행별로 모으고, 손가락으로 넘겨보는 둘만의 앨범",
+        "A private album organized by date and trip, made for swiping together.",
+        "按日期与旅行整理照片，轻轻滑动就能一起回看的专属相册。"
+      )
+    },
+    {
+      id: "question",
+      icon: MessageCircleQuestion,
+      step: tr("준비 중", "In the works", "正在准备"),
+      title: tr("오늘, 우리에게 묻기", "A question for us", "今天，问问我们"),
+      description: tr(
+        "매일 하나의 질문에 각자 답하고 서로의 마음을 발견하는 시간",
+        "One gentle question a day, with a space for both of your answers.",
+        "每天一个温柔的问题，留给彼此回答并重新发现对方。"
+      )
+    },
+    {
+      id: "customize",
+      icon: SlidersHorizontal,
+      step: tr("준비 중", "In the works", "正在准备"),
+      title: tr("우리답게 꾸미기", "Make it ours", "装扮成我们的样子"),
+      description: tr(
+        "대표 사진, 시작일, 기념일과 문구를 둘이 직접 바꾸는 공간",
+        "Change the cover, start date, anniversaries and little messages together.",
+        "一起更换封面、开始日期、纪念日和专属文字。"
+      )
+    },
+    {
+      id: "iphone",
+      icon: Smartphone,
+      step: tr("마지막 단계", "Final touch", "最后一步"),
+      title: tr("아이폰 홈 화면에 쏙", "Made for your iPhone", "装进 iPhone 主屏幕"),
+      description: tr(
+        "주소창 없이 앱처럼 열고, 둘만의 아이콘으로 바로 들어오기",
+        "Open it like an app, without browser chrome, from your own home-screen icon.",
+        "从专属图标直接打开，隐藏地址栏，像真正的 App 一样使用。"
+      )
+    }
+  ];
+  const activeUpcomingFeature = upcomingFeatures.find((feature) => feature.id === upcomingPreviewId) ?? null;
 
   // Couple D-Day calculations (First met: September 23, 2025 in Busan)
   const dDayInfo = useMemo(() => {
@@ -1015,34 +1076,20 @@ const App: React.FC = () => {
       return;
     }
 
-    // 둘만의 간편 비밀번호 인증: 250923
-    if (password === "250923") {
-      setAdminAuthed(true);
-      localStorage.setItem("belle_simple_authed", "true");
-      localStorage.setItem("belle_user_email", email);
-      setAdminPasswordInput("");
-      setAdminError(null);
-      setMode("home");
+    if (!firebaseReady || !auth) {
+      setAdminError(tr("Firebase 연결을 초기화하지 못했습니다.", "Could not initialize Firebase.", "无法初始化 Firebase。"));
       return;
     }
 
-    // Firebase Auth 설정 시 Firebase 인증도 지원
-    if (firebaseReady && auth) {
-      try {
-        await signInWithEmailAndPassword(auth, email, password);
-        setAdminAuthed(true);
-        localStorage.setItem("belle_simple_authed", "true");
-        localStorage.setItem("belle_user_email", email);
-        setAdminPasswordInput("");
-        setAdminError(null);
-        setMode("home");
-        return;
-      } catch {
-        // fall through
-      }
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      localStorage.removeItem("belle_simple_authed");
+      localStorage.setItem("belle_user_email", email);
+      setAdminPasswordInput("");
+      setAdminError(null);
+    } catch {
+      setAdminError(tr("이메일 또는 비밀번호가 맞지 않습니다.", "Incorrect email or password.", "邮箱或密码不正确。"));
     }
-
-    setAdminError(tr("비밀번호가 맞지 않습니다.", "Incorrect password.", "密码不正确。"));
   };
 
   const handleAdminLogout = async () => {
@@ -1099,12 +1146,19 @@ const App: React.FC = () => {
     setIsSidebarOpen(false);
   };
 
+  const goToCharacters = () => {
+    setMode("characters");
+    setIsSidebarOpen(false);
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "auto" });
+      document.querySelector<HTMLElement>(".main-content")?.scrollTo({ top: 0, behavior: "auto" });
+    });
+  };
+
   useEffect(() => {
-    if (localStorage.getItem("belle_simple_authed") === "true") {
-      setAdminAuthed(true);
-      setAuthLoading(false);
-      return;
-    }
+    // Clear sessions created by the former local-only login. Only a real
+    // Firebase Auth session is allowed to unlock Firestore-backed features.
+    localStorage.removeItem("belle_simple_authed");
     if (!firebaseReady || !auth) {
       setAuthLoading(false);
       return;
@@ -1116,9 +1170,7 @@ const App: React.FC = () => {
         setMode("home");
         void loadProfile(user.uid);
       } else {
-        if (localStorage.getItem("belle_simple_authed") !== "true") {
-          setAdminAuthed(false);
-        }
+        setAdminAuthed(false);
         setAuthLoading(false);
       }
     });
@@ -1714,6 +1766,10 @@ const App: React.FC = () => {
                 <FolderPlus size={16} />
                 {tr("오늘의 주제", "Daily Topics", "今日主题")}
               </button>
+              <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToCharacters}>
+                <PawPrint size={16} />
+                {tr("우리 캐릭터", "Our Characters", "我们的角色")}
+              </button>
             </div>
             <ul className="song-list">
               {songs.map((song) => (
@@ -1793,7 +1849,12 @@ const App: React.FC = () => {
             >
               <div className="couple-home-container">
                 {/* Hero Couple Card */}
-                <div className="couple-hero-card">
+                <motion.div
+                  className="couple-hero-card"
+                  initial={{ opacity: 0, y: 18 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+                >
                   <div
                     className="couple-photo-wrapper"
                     onClick={() => setPhotoModalOpen(true)}
@@ -1894,12 +1955,25 @@ const App: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                </div>
+                </motion.div>
 
                 {/* Quick Navigation Cards */}
-                <div className="couple-actions-section">
+                <motion.div
+                  className="couple-actions-section"
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.12, duration: 0.5 }}
+                >
+                  <div className="couple-section-heading">
+                    <div>
+                      <span>{tr("지금 함께하기", "Together now", "现在一起体验")}</span>
+                      <h2>{tr("둘만의 작은 세계", "Our little world", "只属于我们的世界")}</h2>
+                    </div>
+                    <Heart size={18} fill="currentColor" />
+                  </div>
                   <div className="couple-actions-grid">
-                    <div
+                    <button
+                      type="button"
                       className="couple-action-card music"
                       onClick={() => {
                         if (songs.length > 0) loadSong(songs[0]);
@@ -1913,9 +1987,9 @@ const App: React.FC = () => {
                       <div className="couple-action-desc">
                         {tr("싱크 가사와 함께 감상", "Listen with lyrics", "同步歌词聆听")}
                       </div>
-                    </div>
+                    </button>
 
-                    <div className="couple-action-card message" onClick={goToMessage}>
+                    <button type="button" className="couple-action-card message" onClick={goToMessage}>
                       <div className="couple-action-icon">
                         <MessageSquarePlus size={22} />
                       </div>
@@ -1923,9 +1997,9 @@ const App: React.FC = () => {
                       <div className="couple-action-desc">
                         {tr("실시간 사랑의 메시지", "Real-time notes & chat", "实时甜蜜留言")}
                       </div>
-                    </div>
+                    </button>
 
-                    <div className="couple-action-card topic" onClick={goToTopics}>
+                    <button type="button" className="couple-action-card topic" onClick={goToTopics}>
                       <div className="couple-action-icon">
                         <FolderPlus size={22} />
                       </div>
@@ -1933,9 +2007,9 @@ const App: React.FC = () => {
                       <div className="couple-action-desc">
                         {tr("둘만의 소중한 기록", "Shared notes & memories", "记录专属回忆")}
                       </div>
-                    </div>
+                    </button>
 
-                    <div className="couple-action-card request" onClick={goToRequest}>
+                    <button type="button" className="couple-action-card request" onClick={goToRequest}>
                       <div className="couple-action-icon">
                         <PlayCircle size={22} />
                       </div>
@@ -1943,9 +2017,67 @@ const App: React.FC = () => {
                       <div className="couple-action-desc">
                         {tr("함께 듣고 싶은 노래", "Share songs to listen", "想一起听的歌")}
                       </div>
-                    </div>
+                    </button>
+
+                    <button type="button" className="couple-action-card characters" onClick={goToCharacters}>
+                      <div className="character-card-preview" aria-hidden="true">
+                        <img src={`${import.meta.env.BASE_URL}characters/belle-cat.webp`} alt="" />
+                        <img src={`${import.meta.env.BASE_URL}characters/partner-puppy.webp`} alt="" />
+                      </div>
+                      <div className="character-card-copy">
+                        <div className="couple-action-icon"><PawPrint size={20} /></div>
+                        <div>
+                          <div className="couple-action-title">{tr("우리 캐릭터", "Our Characters", "我们的角色")}</div>
+                          <div className="couple-action-desc">
+                            {tr("둘이 뛰노는 작은 정원", "A garden where we wander", "一起玩耍的小花园")}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
                   </div>
-                </div>
+
+                  <div className="couple-private-note">
+                    <LockKeyhole size={14} />
+                    {tr("우리 둘만 로그인해서 보는 공간", "A private place, visible only to us", "只有我们登录后才能看到的空间")}
+                  </div>
+                </motion.div>
+
+                <motion.section
+                  className="upcoming-section"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.22, duration: 0.55 }}
+                >
+                  <div className="upcoming-heading">
+                    <span>{tr("COMING SOON", "COMING SOON", "即将公开")}</span>
+                    <h2>{tr("앞으로 이곳에 생길 것들", "What comes next", "接下来会来到这里的功能")}</h2>
+                    <p>{tr("한 번에 하나씩, 우리에게 꼭 필요한 기능부터 만들게요.", "One thoughtful feature at a time, starting with what matters most to us.", "一次做好一个，从我们最需要的功能开始。")}</p>
+                  </div>
+
+                  <div className="upcoming-list">
+                    {upcomingFeatures.map((feature, index) => {
+                      const Icon = feature.icon;
+                      return (
+                        <motion.button
+                          type="button"
+                          className="upcoming-item"
+                          key={feature.id}
+                          onClick={() => setUpcomingPreviewId(feature.id)}
+                          whileTap={{ scale: 0.985 }}
+                        >
+                          <span className="upcoming-number">{String(index + 1).padStart(2, "0")}</span>
+                          <span className="upcoming-icon"><Icon size={20} /></span>
+                          <span className="upcoming-copy">
+                            <small>{feature.step}</small>
+                            <strong>{feature.title}</strong>
+                            <span>{feature.description}</span>
+                          </span>
+                          <ArrowUpRight className="upcoming-arrow" size={18} />
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </motion.section>
               </div>
 
               {/* Fullscreen Photo Lightbox Modal */}
@@ -1997,6 +2129,53 @@ const App: React.FC = () => {
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {createPortal(
+                <AnimatePresence>
+                  {activeUpcomingFeature && (
+                    <motion.div
+                      className="feature-preview-backdrop"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      onClick={() => setUpcomingPreviewId(null)}
+                    >
+                      <motion.div
+                        className="feature-preview-sheet"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="feature-preview-title"
+                        initial={{ opacity: 0, y: 32, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 24, scale: 0.98 }}
+                        transition={{ type: "spring", damping: 28, stiffness: 320 }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="feature-preview-handle" />
+                        <button
+                          type="button"
+                          className="feature-preview-close"
+                          onClick={() => setUpcomingPreviewId(null)}
+                          aria-label={tr("닫기", "Close", "关闭")}
+                        >
+                          <X size={19} />
+                        </button>
+                        <div className="feature-preview-icon">
+                          <activeUpcomingFeature.icon size={26} />
+                        </div>
+                        <span className="feature-preview-status">{activeUpcomingFeature.step}</span>
+                        <h3 id="feature-preview-title">{activeUpcomingFeature.title}</h3>
+                        <p>{activeUpcomingFeature.description}</p>
+                        <div className="feature-preview-promise">
+                          <Heart size={15} fill="currentColor" />
+                          {tr("곧 우리 둘이 직접 써볼 수 있게 준비할게요.", "We’ll make this ready for the two of us soon.", "很快就会准备好，让我们一起使用。")}
+                        </div>
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>,
+                document.body
+              )}
             </motion.section>
           )}
 
@@ -2191,6 +2370,10 @@ const App: React.FC = () => {
                 </button>
               </div>
             </motion.section>
+          )}
+
+          {mode === "characters" && (
+            <CharacterWorld key="characters" lang={lang} onBack={goToHome} />
           )}
 
           {mode === "topics" && (

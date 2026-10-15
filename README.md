@@ -30,8 +30,12 @@ npm run build
 ```
 그 다음 `docs/`를 커밋/푸시하면 `https://dohoonidot.github.io/forBelle/` 에 반영됩니다.
 
-## 신청곡 Firebase 설정 (비밀번호 로그인)
-신청곡은 Firestore에 저장됩니다. 비밀번호로 로그인하면 브라우저에 유지되며, 로그인된 상태에서만 요청 저장/조회가 가능합니다.
+## Firebase 연결 및 로그인
+채팅, 오늘의 주제, 신청곡, 프로필은 기존 `forbelle-d9825` Firebase 프로젝트를 사용합니다. 공개 웹 클라이언트 설정은 `web/src/firebaseConfig.ts`에 보관되어 있으므로 `.env`가 없어도 GitHub Pages 빌드에서 연결이 유지됩니다. `.env` 값을 지정하면 해당 값이 기본 설정보다 우선합니다.
+
+`admin@forbelle.local`과 `belle@kim.com` 계정은 Firebase Authentication으로 로그인하며, 인증 상태는 Firebase의 브라우저 로컬 지속성으로 유지됩니다.
+
+새 Firebase 프로젝트로 교체할 때만 아래 절차를 사용합니다.
 
 1) Firebase 콘솔에서 새 프로젝트 생성  
 2) Firestore Database 만들기 (Production/테스트 모드 아무거나 시작 가능)  

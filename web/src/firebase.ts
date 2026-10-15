@@ -2,11 +2,12 @@ import { initializeApp, getApps, FirebaseApp } from "firebase/app";
 import { getFirestore, Firestore } from "firebase/firestore";
 import { getAuth, browserLocalPersistence, setPersistence, Auth } from "firebase/auth";
 import { getStorage, FirebaseStorage } from "firebase/storage";
+import { fallbackFirebaseConfig } from "./firebaseConfig";
 
-const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
-const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
-const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
-const appId = import.meta.env.VITE_FIREBASE_APP_ID;
+const apiKey = import.meta.env.VITE_FIREBASE_API_KEY || fallbackFirebaseConfig.apiKey;
+const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || fallbackFirebaseConfig.authDomain;
+const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || fallbackFirebaseConfig.projectId;
+const appId = import.meta.env.VITE_FIREBASE_APP_ID || fallbackFirebaseConfig.appId;
 
 export const isFirebaseConfigured = Boolean(
   apiKey &&
