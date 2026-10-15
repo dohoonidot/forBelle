@@ -34,7 +34,12 @@ import {
   FolderPlus,
   FilePlus,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Heart,
+  Calendar,
+  MapPin,
+  Sparkles,
+  Maximize2
 } from "lucide-react";
 
 type Cue = {
@@ -506,6 +511,7 @@ const App: React.FC = () => {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [lineHeight, setLineHeight] = useState(0.5);
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
 
   const firebaseReady =
     Boolean(import.meta.env.VITE_FIREBASE_API_KEY) &&
@@ -517,6 +523,66 @@ const App: React.FC = () => {
     if (lang === "zh") return zh;
     return ko;
   };
+
+  // Couple D-Day calculations (First met: September 23, 2025 in Busan)
+  const dDayInfo = useMemo(() => {
+    const start = new Date(2025, 8, 23); // 2025-09-23
+    const now = new Date();
+    const startMidnight = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+    const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const daysTogether = Math.max(1, Math.floor((nowMidnight - startMidnight) / (1000 * 60 * 60 * 24)) + 1);
+
+    const calcMilestone = (days: number, nameKo: string, nameEn: string, nameZh: string) => {
+      const targetDate = new Date(startMidnight + (days - 1) * (1000 * 60 * 60 * 24));
+      const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate()).getTime();
+      const remainDays = Math.ceil((targetMidnight - nowMidnight) / (1000 * 60 * 60 * 24));
+      const dateStr = `${targetDate.getFullYear()}.${String(targetDate.getMonth() + 1).padStart(2, "0")}.${String(targetDate.getDate()).padStart(2, "0")}`;
+      return {
+        days,
+        name: tr(nameKo, nameEn, nameZh),
+        dateStr,
+        remainDays,
+        isPassed: remainDays <= 0,
+        isNext: false
+      };
+    };
+
+    const calcYearMilestone = (years: number, nameKo: string, nameEn: string, nameZh: string) => {
+      const targetDate = new Date(start.getFullYear() + years, start.getMonth(), start.getDate());
+      const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate()).getTime();
+      const remainDays = Math.ceil((targetMidnight - nowMidnight) / (1000 * 60 * 60 * 24));
+      const dateStr = `${targetDate.getFullYear()}.${String(targetDate.getMonth() + 1).padStart(2, "0")}.${String(targetDate.getDate()).padStart(2, "0")}`;
+      return {
+        days: years * 365,
+        name: tr(nameKo, nameEn, nameZh),
+        dateStr,
+        remainDays,
+        isPassed: remainDays <= 0,
+        isNext: false
+      };
+    };
+
+    const milestones = [
+      calcMilestone(100, "100일", "100 Days", "100天"),
+      calcMilestone(200, "200일", "200 Days", "200天"),
+      calcMilestone(300, "300일", "300 Days", "300天"),
+      calcYearMilestone(1, "1주년", "1st Anniversary", "1周年"),
+      calcMilestone(400, "400일", "400 Days", "400天"),
+      calcMilestone(500, "500일", "500 Days", "500天"),
+      calcYearMilestone(2, "2주년", "2nd Anniversary", "2周年")
+    ];
+
+    const nextUpcoming = milestones.find((m) => m.remainDays > 0);
+    if (nextUpcoming) {
+      nextUpcoming.isNext = true;
+    }
+
+    return {
+      daysTogether,
+      milestones,
+      nextUpcoming
+    };
+  }, [lang]);
   const formatDate = (ms?: number) => {
     if (!ms) return "";
     const locale = lang === "en" ? "en-US" : lang === "zh" ? "zh-TW" : "ko-KR";
@@ -1674,33 +1740,219 @@ const App: React.FC = () => {
           {mode === "home" && (
             <motion.section
               key="home"
-              className="panel welcome-screen"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.5 }}
+              className="panel display"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.4 }}
+              style={{ padding: "0 0 40px" }}
             >
-              <div className="row" style={{ justifyContent: "flex-end", width: "100%" }} />
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
-              >
-                <Music size={64} style={{ color: "#D4B996", marginBottom: 24 }} />
-              </motion.div>
-              <h2>
-                {tr("환영합니다!", "Welcome!", "欢迎光临！")}
-                {nickname
-                  ? lang === "en"
-                    ? ` ${nickname}!`
-                    : lang === "zh"
-                      ? ` ${nickname}！`
-                      : ` ${nickname} 님`
-                  : ""}
-              </h2>
-              <p>{tr("앞으로도 계속 업데이트할게요.", "I will keep updating.", "之后我会持续更新的。")}</p>
-              <p>{tr("계속 지켜봐줘, 고마워요.", "Please keep watching, thank you.", "请继续关注，谢谢你。")}</p>
-              <p style={{ marginTop: 16, fontWeight: 500 }}>{tr("나는 good boy.", "I am a good boy.", "我是 good boy。")}</p>
+              <div className="couple-home-container">
+                {/* Hero Couple Card */}
+                <div className="couple-hero-card">
+                  <div
+                    className="couple-photo-wrapper"
+                    onClick={() => setPhotoModalOpen(true)}
+                    title={tr("클릭하여 사진 크게 보기", "Click to enlarge photo", "点击放大照片")}
+                  >
+                    <img
+                      src="./images/busan_couple.jpg"
+                      alt="Busan Beach and Bridge"
+                      className="couple-photo-img"
+                    />
+                    <div className="couple-photo-overlay">
+                      <div className="couple-photo-top-bar">
+                        <span className="couple-tag location">
+                          <MapPin size={14} />
+                          {tr("부산 (Busan)", "Busan, Korea", "韩国釜山")}
+                        </span>
+                        <span className="couple-tag zoom-hint">
+                          <Maximize2 size={12} />
+                          {tr("사진 확대", "Enlarge", "放大照片")}
+                        </span>
+                      </div>
+
+                      <div className="couple-photo-bottom-bar">
+                        <div className="couple-memory-caption">
+                          <h3>{tr("우리의 이야기가 시작된 곳", "Where our story began", "我们故事开始的地方")}</h3>
+                          <p>{tr("2025. 09. 23 • 부산 광안리 해변 & 부산대교", "Sep 23, 2025 • Busan Beach & Grand Bridge", "2025. 09. 23 • 釜山海滩与大海桥")}</p>
+                        </div>
+                        <div className="couple-dday-badge">
+                          <Heart size={18} fill="#FFFFFF" />
+                          <span>D+{dDayInfo.daysTogether}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="couple-card-body">
+                    <div className="couple-counter-section">
+                      <div className="couple-counter-lead">
+                        <Sparkles size={16} color="#E26D5C" />
+                        {tr("우리가 처음 손잡고 만난 날로부터", "Since the very first day we met", "从我们相识相聚的那天起")}
+                      </div>
+                      <div className="couple-counter-number">
+                        {tr("함께한 지", "Together for", "相伴第")} <span>{dDayInfo.daysTogether}</span> {tr("일째", "Days", "天")}
+                      </div>
+                      <div className="couple-counter-sub">
+                        2025. 09. 23 ~ {tr("지금 이 순간까지", "Right this moment", "直到此时此刻")} ❤️
+                      </div>
+                    </div>
+
+                    <div className="couple-letter">
+                      <p>
+                        {tr(
+                          "가장 사랑하는 Belle을 위한 특별한 공간입니다.",
+                          "A very special space dedicated to my beloved Belle.",
+                          "为了我最爱的 Belle 所打造的专属天地。"
+                        )}
+                      </p>
+                      <p>
+                        {tr(
+                          "부산의 따뜻한 바닷바람과 파도 소리처럼, 우리가 함께 듣는 모든 음악과 추억들을 여기에 차곡차곡 담아둘게요.",
+                          "Just like the gentle sea breeze and waves of Busan, all our melodies and memories will be cherished right here.",
+                          "正如釜山温暖的海风与浪花般，我们将共同聆听的旋律与记忆悉心珍藏于此。"
+                        )}
+                      </p>
+                      <p className="highlight">
+                        {tr(
+                          "앞으로도 계속 함께할 시간들을 기대해. 고마워요 Belle! ✨",
+                          "Looking forward to all our future days together. Thank you Belle! ✨",
+                          "期待未来与你一同度过的每一个明天。谢谢你 Belle！✨"
+                        )}
+                      </p>
+                    </div>
+
+                    {/* Milestones / Anniversaries Timeline */}
+                    <div className="milestones-section">
+                      <div className="milestones-title">
+                        <Calendar size={16} />
+                        <span>{tr("우리의 소중한 기념일들", "Our Anniversaries", "我们的纪念日")}</span>
+                      </div>
+                      <div className="milestones-grid">
+                        {dDayInfo.milestones.map((milestone, idx) => (
+                          <div
+                            key={idx}
+                            className={`milestone-item ${milestone.isNext ? "active" : ""} ${milestone.isPassed ? "passed" : ""}`}
+                          >
+                            <div className="milestone-name">
+                              {milestone.isNext && "⭐ "}
+                              {milestone.name}
+                            </div>
+                            <div className="milestone-date">{milestone.dateStr}</div>
+                            <div className="milestone-dday">
+                              {milestone.isPassed
+                                ? tr("지남 ✓", "Passed ✓", "已达成 ✓")
+                                : `D-${milestone.remainDays}`}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Navigation Cards */}
+                <div className="couple-actions-section">
+                  <div className="couple-actions-grid">
+                    <div
+                      className="couple-action-card music"
+                      onClick={() => {
+                        if (songs.length > 0) loadSong(songs[0]);
+                        else setMode("viewer");
+                      }}
+                    >
+                      <div className="couple-action-icon">
+                        <Music size={22} />
+                      </div>
+                      <div className="couple-action-title">{tr("우리의 노래", "Our Music", "我们的歌")}</div>
+                      <div className="couple-action-desc">
+                        {tr("싱크 가사와 함께 감상", "Listen with lyrics", "同步歌词聆听")}
+                      </div>
+                    </div>
+
+                    <div className="couple-action-card message" onClick={goToMessage}>
+                      <div className="couple-action-icon">
+                        <MessageSquarePlus size={22} />
+                      </div>
+                      <div className="couple-action-title">{tr("상대에게 한마디", "Sweet Messages", "对他说句话")}</div>
+                      <div className="couple-action-desc">
+                        {tr("실시간 사랑의 메시지", "Real-time notes & chat", "实时甜蜜留言")}
+                      </div>
+                    </div>
+
+                    <div className="couple-action-card topic" onClick={goToTopics}>
+                      <div className="couple-action-icon">
+                        <FolderPlus size={22} />
+                      </div>
+                      <div className="couple-action-title">{tr("오늘의 주제 & 일기", "Our Diary", "今日主题与日记")}</div>
+                      <div className="couple-action-desc">
+                        {tr("둘만의 소중한 기록", "Shared notes & memories", "记录专属回忆")}
+                      </div>
+                    </div>
+
+                    <div className="couple-action-card request" onClick={goToRequest}>
+                      <div className="couple-action-icon">
+                        <PlayCircle size={22} />
+                      </div>
+                      <div className="couple-action-title">{tr("신청곡 보내기", "Song Request", "点播歌曲")}</div>
+                      <div className="couple-action-desc">
+                        {tr("함께 듣고 싶은 노래", "Share songs to listen", "想一起听的歌")}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Fullscreen Photo Lightbox Modal */}
+              <AnimatePresence>
+                {photoModalOpen && (
+                  <motion.div
+                    className="couple-lightbox"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setPhotoModalOpen(false)}
+                  >
+                    <motion.div
+                      className="couple-lightbox-content"
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.9, opacity: 0 }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        className="couple-lightbox-close"
+                        onClick={() => setPhotoModalOpen(false)}
+                        title={tr("닫기", "Close", "关闭")}
+                      >
+                        <X size={20} />
+                      </button>
+                      <img
+                        src="./images/busan_couple.jpg"
+                        alt="Busan Beach and Bridge at Sunset"
+                        className="couple-lightbox-img"
+                      />
+                      <div className="couple-lightbox-footer">
+                        <h4>
+                          {tr(
+                            "2025년 9월 23일, 우리의 사랑이 시작된 부산의 바다",
+                            "Sep 23, 2025 • Where our love began in Busan",
+                            "2025年 9月 23日，我们的爱开始的釜山之海"
+                          )}
+                        </h4>
+                        <p>
+                          {tr(
+                            "부산 바다와 대교의 노을빛 아래 손잡고 걸었던 그날의 설렘을 영원히 기억하며. ❤️",
+                            "Cherishing the excitement of walking hand in hand under the sunset of Busan bridge and ocean. ❤️",
+                            "永远珍藏在釜山大桥与大海的落日余晖下手牵手漫步的那份心动。❤️"
+                          )}
+                        </p>
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.section>
           )}
 
