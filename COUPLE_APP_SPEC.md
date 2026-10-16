@@ -9,10 +9,11 @@
 * **프론트엔드**: GitHub Pages (`https://dohoonidot.github.io/forBelle/`)
 * **백엔드/데이터베이스**: Firebase Cloud Firestore (실시간 NoSQL, 1GB 무료)
 * **인증**: Firebase Authentication (이메일/비번, 50,000 MAU 무료)
-* **미디어 스토리지**: Firebase Cloud Storage (5GB 용량, 일일 1GB 다운로드 대역폭)
+* **미디어 스토리지**: Supabase Storage Free (비공개 `couple-album` 버킷, 1GB 저장공간)
 * **핵심 기술 (이미지 압축 파이프라인)**:
-  - 브라우저 단에서 HTML5 Canvas 기반 WebP 리사이징(최대 1920px, 품질 85%)을 거쳐 **장당 200~400KB**로 축소 후 Storage 업로드.
-  - **효과**: 무료 5GB 용량으로 **약 15,000 ~ 25,000장의 고화질 사진 영구 보관 가능** (10년 이상 무료 운영 보장).
+  - 브라우저에서 표시용 최대 2048px WebP(품질 82%)와 썸네일 최대 640px WebP(품질 76%)를 만든 뒤 Storage에 업로드.
+  - **현실적 목표**: 무료 1GB에서 썸네일 포함 약 **1,200~1,600장**. 원본은 iCloud/휴대폰에 보관한다.
+  - Firebase Authentication 토큰을 Supabase Third-Party Auth가 검증하므로 추가 로그인은 없다.
 
 ---
 
@@ -86,16 +87,17 @@
 * **클라이언트 즉시 압축**:
   - 10MB 원본 사진을 브라우저에서 200~400KB WebP로 자동 압축 후 Firebase Storage에 전송.
   - 업로드 프로그레스 바(진행률 %) 실시간 표시.
-* **데이터 모델 (Firestore: `photos`)**:
+* **데이터 모델 (Firestore: `album_photos`)**:
   ```typescript
   interface PhotoMemory {
     id: string;
-    imageUrls: string[]; // 압축된 WebP 이미지 URL 배열
+    displayPath: string; // Supabase private display 이미지 경로
+    thumbnailPath: string; // Supabase private 썸네일 경로
     caption: string;
     location: string;
     date: string; // "YYYY-MM-DD"
     albumTag: string; // 예: "부산여행", "일상"
-    likedBy: string[]; // 좋아요 누른 UID
+    likedBy: string[]; // 좋아요 누른 Firebase UID
     createdAt: Timestamp;
     createdBy: string; // 업로더 UID
   }
@@ -164,5 +166,5 @@
 | **Phase 0** | **현재 상태 빌드 및 배포 점검**<br>- 로컬에서 수정된 커플 홈 UI 빌드 (`npm run build`) 후 배포 반영<br>- 웹 주소 확인 및 라이브 사이트 검증 | 즉시 | ✅ 진행 예정 |
 | **Phase 1** | **메인 홈 커스텀 (대표 사진 & D-Day/기념일 설정)**<br>- Firestore `settings/couple` 연동<br>- 메인 커버 사진 업로드 및 자동 압축 모달<br>- 사귄 날짜 및 커스텀 기념일 추가/수정 모달 구현 | 1일차 | 🚀 다음 단계 |
 | **Phase 2** | **TipTap 일기장 사진 본문 삽입**<br>- 클라이언트 WebP 압축 유틸리티 함수 구현<br>- TipTap 툴바 이미지 업로드 버튼 및 드래그앤드롭/붙여넣기 연동<br>- Firebase Storage 자동 업로드 파이프라인 구축 | 1~2일차 | 준비 |
-| **Phase 3** | **커플 갤러리 & 추억 앨범 탭 신설**<br>- 타임라인 뷰 / 앨범 뷰 UI 제작<br>- 다중 사진 업로드 및 메타데이터(날짜, 장소, 태그) 저장<br>- 전체화면 터치 스와이프 라이트박스 | 2~3일차 | 준비 |
+| **Phase 3** | **커플 갤러리 & 추억 앨범 탭 신설**<br>- Supabase 비공개 Storage 연동 구조<br>- 다중 사진 WebP 압축 및 메타데이터 저장<br>- 월별 타임라인/태그 필터/하트/삭제<br>- 전체화면 터치 스와이프 라이트박스 | 구현 완료, 외부 키 연결 대기 | ✅ 코드 완료 |
 | **Phase 4** | **PWA 및 디테일 감성 완성**<br>- 모바일 홈화면 추가용 Manifest & 아이콘 세팅<br>- 부드러운 마이크로 인터랙션 및 모바일 반응형 완벽 보정 | 3일차 | 마무리 |

@@ -1,0 +1,25 @@
+// Add this inside: match /databases/{database}/documents { ... }
+// Merge it with the existing Firestore rules; do not replace unrelated rules.
+
+function isForBelleMember() {
+  return request.auth != null
+    && request.auth.token.email in [
+      'admin@forbelle.local',
+      'belle@kim.com'
+    ];
+}
+
+match /album_photos/{photoId} {
+  allow read: if isForBelleMember();
+
+  allow create: if isForBelleMember()
+    && request.resource.data.createdBy == request.auth.uid;
+
+  allow update: if isForBelleMember()
+    && request.resource.data.createdBy == resource.data.createdBy
+    && request.resource.data.displayPath == resource.data.displayPath
+    && request.resource.data.thumbnailPath == resource.data.thumbnailPath;
+
+  allow delete: if isForBelleMember()
+    && resource.data.createdBy == request.auth.uid;
+}

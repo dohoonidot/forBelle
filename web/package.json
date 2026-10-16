@@ -12,6 +12,7 @@
     "deploy": "gh-pages -d ../docs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "@tiptap/extension-image": "^2.8.0",
     "@tiptap/extension-link": "^2.8.0",
     "@tiptap/extension-placeholder": "^2.8.0",

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { songs, Song } from "./songs";
 import { motion, AnimatePresence } from "framer-motion";
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, writeBatch, where } from "firebase/firestore";
+import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, writeBatch, where } from "firebase/firestore";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { auth, db, storage, isFirebaseConfigured } from "./firebase";
 import CharacterWorld from "./CharacterWorld";
@@ -48,7 +48,8 @@ import {
   Smartphone,
   ArrowUpRight,
   LockKeyhole,
-  PawPrint
+  PawPrint,
+  Reply
 } from "lucide-react";
 
 type Cue = {
@@ -73,6 +74,13 @@ type ChatMessage = {
   createdBy?: string;
   createdByName?: string;
   createdByPhotoURL?: string;
+  readBy?: string[];
+  heartBy?: string[];
+  replyTo?: {
+    id: string;
+    text: string;
+    createdByName: string;
+  };
 };
 
 type TopicNode = {
@@ -101,7 +109,7 @@ declare global {
   }
 }
 
-type AppMode = "home" | "editor" | "viewer" | "request" | "message" | "topics" | "characters";
+type AppMode = "home" | "editor" | "viewer" | "request" | "message" | "topics" | "characters" | "album";
 type Lang = "ko" | "en" | "zh";
 
 type TopicTreeProps = {
@@ -274,6 +282,7 @@ const TopicTreeNode = ({
 };
 
 const POLL_MS = 150;
+const Album = React.lazy(() => import("./Album"));
 
 const timeToMs = (raw: string): number | null => {
   const cleaned = raw.trim();
@@ -489,6 +498,11 @@ const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageInput, setMessageInput] = useState("");
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const chatMessagesRef = useRef<HTMLDivElement | null>(null);
+  const lastMarkedMessageRef = useRef("");
+  const chatLongPressTimerRef = useRef<number | null>(null);
+  const [chatActionMessage, setChatActionMessage] = useState<ChatMessage | null>(null);
+  const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [topicNodes, setTopicNodes] = useState<TopicNode[]>([]);
   const [topicsLoading, setTopicsLoading] = useState(false);
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
@@ -534,17 +548,6 @@ const App: React.FC = () => {
   };
 
   const upcomingFeatures = [
-    {
-      id: "gallery",
-      icon: Images,
-      step: tr("다음 업데이트", "Next update", "下次更新"),
-      title: tr("우리의 추억 갤러리", "Our memory gallery", "我们的回忆相册"),
-      description: tr(
-        "사진을 날짜와 여행별로 모으고, 손가락으로 넘겨보는 둘만의 앨범",
-        "A private album organized by date and trip, made for swiping together.",
-        "按日期与旅行整理照片，轻轻滑动就能一起回看的专属相册。"
-      )
-    },
     {
       id: "question",
       icon: MessageCircleQuestion,
@@ -651,6 +654,36 @@ const App: React.FC = () => {
       minute: "2-digit"
     });
   };
+
+  const isSameMessageDay = (left?: number, right?: number) => {
+    if (!left || !right) return false;
+    const a = new Date(left);
+    const b = new Date(right);
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  };
+
+  const formatMessageDay = (ms: number) => {
+    const date = new Date(ms);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (isSameMessageDay(ms, today.getTime())) return tr("오늘", "Today", "今天");
+    if (isSameMessageDay(ms, yesterday.getTime())) return tr("어제", "Yesterday", "昨天");
+    const locale = lang === "en" ? "en-US" : lang === "zh" ? "zh-TW" : "ko-KR";
+    return date.toLocaleDateString(locale, { year: "numeric", month: "long", day: "numeric", weekday: "short" });
+  };
+
+  const formatMessageTime = (ms?: number) => {
+    if (!ms) return "";
+    const locale = lang === "en" ? "en-US" : lang === "zh" ? "zh-TW" : "ko-KR";
+    return new Date(ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const currentChatEmail = auth?.currentUser?.email?.toLowerCase() || localStorage.getItem("belle_user_email")?.toLowerCase() || "";
+  const lastOwnMessageIndex = messages.reduce(
+    (lastIndex, message, index) => message.createdBy?.toLowerCase() === currentChatEmail ? index : lastIndex,
+    -1
+  );
 
   const loadProfile = async (uid: string) => {
     if (!firebaseReady) return;
@@ -984,14 +1017,26 @@ const App: React.FC = () => {
       q,
       (snapshot) => {
         const items = snapshot.docs.map((docSnap) => {
-          const data = docSnap.data() as { text?: string; createdAt?: Timestamp; createdBy?: string; createdByName?: string; createdByPhotoURL?: string };
+          const data = docSnap.data() as {
+            text?: string;
+            createdAt?: Timestamp;
+            createdBy?: string;
+            createdByName?: string;
+            createdByPhotoURL?: string;
+            readBy?: string[];
+            heartBy?: string[];
+            replyTo?: ChatMessage["replyTo"];
+          };
           return {
             id: docSnap.id,
             text: data.text ?? "",
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : undefined,
             createdBy: data.createdBy ?? "",
             createdByName: data.createdByName ?? "",
-            createdByPhotoURL: data.createdByPhotoURL ?? ""
+            createdByPhotoURL: data.createdByPhotoURL ?? "",
+            readBy: Array.isArray(data.readBy) ? data.readBy : [],
+            heartBy: Array.isArray(data.heartBy) ? data.heartBy : [],
+            replyTo: data.replyTo
           };
         });
         setMessages(items.filter((m) => m.text));
@@ -1006,14 +1051,57 @@ const App: React.FC = () => {
     if (!firebaseReady || !adminAuthed) return;
     const text = messageInput.trim();
     if (!text) return;
-    await addDoc(collection(db, "messages"), {
+    const payload: Record<string, unknown> = {
       text,
       createdBy: auth.currentUser?.email ?? "",
       createdByName: nickname.trim(),
       createdByPhotoURL: profilePhotoUrl || "",
       createdAt: serverTimestamp()
-    });
+    };
+    if (replyTarget) {
+      payload.replyTo = {
+        id: replyTarget.id,
+        text: replyTarget.text.slice(0, 180),
+        createdByName: replyTarget.createdByName || replyTarget.createdBy || tr("상대", "Partner", "对方")
+      };
+    }
+    await addDoc(collection(db, "messages"), payload);
     setMessageInput("");
+    setReplyTarget(null);
+  };
+
+  const cancelChatLongPress = () => {
+    if (chatLongPressTimerRef.current) {
+      window.clearTimeout(chatLongPressTimerRef.current);
+      chatLongPressTimerRef.current = null;
+    }
+  };
+
+  const startChatLongPress = (message: ChatMessage) => {
+    cancelChatLongPress();
+    chatLongPressTimerRef.current = window.setTimeout(() => {
+      setChatActionMessage(message);
+      navigator.vibrate?.(12);
+      chatLongPressTimerRef.current = null;
+    }, 520);
+  };
+
+  const selectReplyTarget = (message: ChatMessage) => {
+    setReplyTarget(message);
+    setChatActionMessage(null);
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>(".chat-input")?.focus());
+  };
+
+  const toggleMessageHeart = async (message: ChatMessage) => {
+    const email = auth?.currentUser?.email?.toLowerCase();
+    if (!firebaseReady || !email) return;
+    const alreadyHearted = message.heartBy?.some((reader) => reader.toLowerCase() === email);
+    setChatActionMessage(null);
+    await setDoc(
+      doc(db, "messages", message.id),
+      { heartBy: alreadyHearted ? arrayRemove(email) : arrayUnion(email) },
+      { merge: true }
+    );
   };
 
   const loadRequests = async () => {
@@ -1155,6 +1243,12 @@ const App: React.FC = () => {
     });
   };
 
+  const goToAlbum = () => {
+    setMode("album");
+    setIsSidebarOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(".main-content")?.scrollTo({ top: 0, behavior: "auto" }));
+  };
+
   useEffect(() => {
     // Clear sessions created by the former local-only login. Only a real
     // Firebase Auth session is allowed to unlock Firestore-backed features.
@@ -1184,6 +1278,86 @@ const App: React.FC = () => {
       if (typeof unsub === "function") unsub();
     };
   }, [adminAuthed, mode]);
+
+  useEffect(() => {
+    if (!adminAuthed || mode !== "message" || !firebaseReady || messages.length === 0) return;
+    const email = auth?.currentUser?.email?.toLowerCase() || "";
+    const latestMessageFromPartner = [...messages].reverse().find(
+      (message) => message.createdBy?.toLowerCase() !== email
+    );
+    if (!email || !latestMessageFromPartner) return;
+
+    const markAsRead = () => {
+      if (document.visibilityState !== "visible") return;
+      const markKey = `${email}:${latestMessageFromPartner.id}`;
+      if (lastMarkedMessageRef.current === markKey) return;
+      if (latestMessageFromPartner.readBy?.some((reader) => reader.toLowerCase() === email)) {
+        lastMarkedMessageRef.current = markKey;
+        return;
+      }
+      lastMarkedMessageRef.current = markKey;
+      void setDoc(
+        doc(db, "messages", latestMessageFromPartner.id),
+        { readBy: arrayUnion(email) },
+        { merge: true }
+      ).catch(() => {
+        lastMarkedMessageRef.current = "";
+      });
+    };
+
+    markAsRead();
+    const handleVisibility = () => markAsRead();
+    window.addEventListener("focus", markAsRead);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", markAsRead);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [adminAuthed, mode, firebaseReady, messages]);
+
+  useEffect(() => {
+    if (mode !== "message") return;
+
+    const updateChatViewport = () => {
+      const height = window.visualViewport?.height ?? window.innerHeight;
+      document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
+      requestAnimationFrame(() => {
+        const box = chatMessagesRef.current;
+        if (box) box.scrollTop = box.scrollHeight;
+      });
+    };
+
+    document.body.classList.add("chat-open");
+    document.querySelector<HTMLElement>(".main-content")?.scrollTo(0, 0);
+    updateChatViewport();
+    window.visualViewport?.addEventListener("resize", updateChatViewport);
+    window.visualViewport?.addEventListener("scroll", updateChatViewport);
+    window.addEventListener("resize", updateChatViewport);
+
+    return () => {
+      document.body.classList.remove("chat-open");
+      document.documentElement.style.removeProperty("--chat-viewport-height");
+      window.visualViewport?.removeEventListener("resize", updateChatViewport);
+      window.visualViewport?.removeEventListener("scroll", updateChatViewport);
+      window.removeEventListener("resize", updateChatViewport);
+    };
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "message") return;
+
+    const scrollToLatest = () => {
+      const box = chatMessagesRef.current;
+      if (box) box.scrollTop = Number.MAX_SAFE_INTEGER;
+    };
+    const frame = requestAnimationFrame(() => requestAnimationFrame(scrollToLatest));
+    const settleTimer = window.setTimeout(scrollToLatest, 180);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+    };
+  }, [mode, messages.length, messagesLoading]);
 
   useEffect(() => {
     if (!adminAuthed || mode !== "topics") return;
@@ -1678,7 +1852,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="layout-container">
+    <div className={`layout-container ${mode === "message" ? "chat-active" : ""} ${mode === "album" ? "album-active" : ""}`}>
       <aside className={`sidebar ${isSidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
           {mode === "topics" ? (
@@ -1770,6 +1944,10 @@ const App: React.FC = () => {
                 <PawPrint size={16} />
                 {tr("우리 캐릭터", "Our Characters", "我们的角色")}
               </button>
+              <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToAlbum}>
+                <Images size={16} />
+                {tr("우리의 앨범", "Our Album", "我们的相册")}
+              </button>
             </div>
             <ul className="song-list">
               {songs.map((song) => (
@@ -1821,7 +1999,7 @@ const App: React.FC = () => {
       </aside>
 
       {/* Main Content */}
-      <div className="main-content">
+      <div className={`main-content ${mode === "message" ? "message-mode" : ""} ${mode === "album" ? "album-mode" : ""}`}>
         <header className="header">
           <button className="menu-btn" onClick={() => setIsSidebarOpen(true)}>
             <Menu size={24} />
@@ -1996,6 +2174,16 @@ const App: React.FC = () => {
                       <div className="couple-action-title">{tr("상대에게 한마디", "Sweet Messages", "对他说句话")}</div>
                       <div className="couple-action-desc">
                         {tr("실시간 사랑의 메시지", "Real-time notes & chat", "实时甜蜜留言")}
+                      </div>
+                    </button>
+
+                    <button type="button" className="couple-action-card album" onClick={goToAlbum}>
+                      <div className="couple-action-icon">
+                        <Images size={22} />
+                      </div>
+                      <div className="couple-action-title">{tr("우리의 앨범", "Our Album", "我们的相册")}</div>
+                      <div className="couple-action-desc">
+                        {tr("날짜별로 모으는 둘만의 사진", "Our private photo timeline", "按日期收藏的两人照片")}
                       </div>
                     </button>
 
@@ -2282,98 +2470,162 @@ const App: React.FC = () => {
           {mode === "message" && (
             <motion.section
               key="message"
-              className="panel"
+              className="chat-screen"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <h2 style={{ marginBottom: 8 }}>{tr("상대에게 한마디", "Message", "对他说句话")}</h2>
-              <p className="label" style={{ marginBottom: 16 }}>
-                {tr("서로에게 짧은 메시지를 남겨보세요.", "Leave short messages to each other.", "给对方留下短消息吧。")}
-              </p>
               <div
-                className="chat-box"
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  maxHeight: 320,
-                  overflowY: "auto",
-                  padding: 12,
-                  background: "#fff",
-                  borderRadius: 12,
-                  border: "1px solid #eee"
-                }}
+                ref={chatMessagesRef}
+                className="chat-messages"
+                aria-live="polite"
               >
                 {messagesLoading ? (
-                  <p className="label">{tr("불러오는 중...", "Loading...", "加载中...")}</p>
+                  <p className="chat-empty">{tr("대화를 불러오는 중...", "Loading conversation...", "正在加载对话...")}</p>
                 ) : messages.length === 0 ? (
-                  <p className="label">{tr("아직 메시지가 없습니다.", "No messages yet.", "还没有消息。")}</p>
+                  <p className="chat-empty">{tr("첫 메시지를 남겨보세요.", "Send the first message.", "发送第一条消息吧。")}</p>
                 ) : (
-                  messages.map((m) => {
-                    const currentUserEmail = auth?.currentUser?.email || localStorage.getItem("belle_user_email");
-                    const mine = Boolean(m.createdBy && m.createdBy === currentUserEmail);
+                  messages.map((m, index) => {
+                    const mine = Boolean(m.createdBy && m.createdBy.toLowerCase() === currentChatEmail);
+                    const showDayDivider = Boolean(
+                      m.createdAt && (index === 0 || !isSameMessageDay(messages[index - 1]?.createdAt, m.createdAt))
+                    );
+                    const isRead = Boolean(
+                      mine && index === lastOwnMessageIndex && m.readBy?.some((reader) => reader.toLowerCase() !== currentChatEmail)
+                    );
                     return (
-                      <div
-                        key={m.id}
-                        style={{
-                          alignSelf: mine ? "flex-end" : "flex-start",
-                          maxWidth: "80%"
-                        }}
-                      >
-                        <div style={{ display: "flex", gap: 8, flexDirection: mine ? "row-reverse" : "row", alignItems: "flex-end" }}>
-                          {m.createdByPhotoURL ? (
-                            <img
-                              src={m.createdByPhotoURL}
-                              alt="avatar"
-                              style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }}
-                            />
-                          ) : (
-                            <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#eee" }} />
-                          )}
-                          <div
-                            style={{
-                              background: mine ? "#D9C9B6" : "#F2F2F2",
-                              color: "#222",
-                              padding: "8px 12px",
-                              borderRadius: 12,
-                              whiteSpace: "pre-wrap"
-                            }}
-                          >
-                            {m.text}
+                      <React.Fragment key={m.id}>
+                        {showDayDivider && m.createdAt && (
+                          <div className="chat-day-divider" role="separator" aria-label={formatMessageDay(m.createdAt)}>
+                            <span>{formatMessageDay(m.createdAt)}</span>
                           </div>
+                        )}
+                        <div
+                          className={`chat-message ${mine ? "mine" : "theirs"}`}
+                          onPointerDown={() => startChatLongPress(m)}
+                          onPointerUp={cancelChatLongPress}
+                          onPointerCancel={cancelChatLongPress}
+                          onPointerMove={cancelChatLongPress}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            cancelChatLongPress();
+                            setChatActionMessage(m);
+                          }}
+                          onDoubleClick={() => void toggleMessageHeart(m)}
+                        >
+                          <div className="chat-message-line">
+                            {m.createdByPhotoURL ? (
+                              <img
+                                src={m.createdByPhotoURL}
+                                alt="avatar"
+                                className="chat-avatar"
+                              />
+                            ) : (
+                              <div className="chat-avatar chat-avatar-fallback" aria-hidden="true" />
+                            )}
+                            <div className="chat-bubble">
+                              {m.replyTo && (
+                                <div className="chat-reply-quote">
+                                  <strong>{m.replyTo.createdByName}</strong>
+                                  <span>{m.replyTo.text}</span>
+                                </div>
+                              )}
+                              <span>{m.text}</span>
+                            </div>
+                          </div>
+                          <div className="chat-meta">
+                            {(m.createdByName || m.createdBy || tr("알 수 없음", "Unknown", "未知"))}
+                            {m.createdAt ? ` · ${formatMessageTime(m.createdAt)}` : ""}
+                            {isRead && <span className="chat-read-receipt"> · {tr("읽음", "Read", "已读")}</span>}
+                          </div>
+                          {Boolean(m.heartBy?.length) && (
+                            <button
+                              type="button"
+                              className={`chat-heart-reaction ${m.heartBy?.some((email) => email.toLowerCase() === currentChatEmail) ? "mine" : ""}`}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={() => void toggleMessageHeart(m)}
+                              aria-label={tr("하트 반응", "Heart reaction", "爱心回应")}
+                            >
+                              <Heart size={12} fill="currentColor" /> {m.heartBy?.length}
+                            </button>
+                          )}
                         </div>
-                        <div className="label" style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>
-                          {(m.createdByName || m.createdBy || tr("알 수 없음", "Unknown", "未知"))}
-                          {m.createdAt ? ` · ${formatDate(m.createdAt)}` : ""}
-                        </div>
-                      </div>
+                      </React.Fragment>
                     );
                   })
                 )}
               </div>
-              <div className="row" style={{ marginTop: 12 }}>
-                <input
-                  className="input"
-                  placeholder={tr("메시지를 입력하세요", "Type a message", "输入消息")}
-                  value={messageInput}
-                  onChange={(e) => setMessageInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void sendMessage();
-                    }
-                  }}
-                />
-                <button className="btn primary" onClick={sendMessage}>
-                  {tr("보내기", "Send", "发送")}
-                </button>
+              <div className="chat-composer">
+                {replyTarget && (
+                  <div className="chat-reply-preview">
+                    <Reply size={15} />
+                    <div>
+                      <strong>{tr("답장", "Replying", "回复")} · {replyTarget.createdByName || replyTarget.createdBy}</strong>
+                      <span>{replyTarget.text}</span>
+                    </div>
+                    <button type="button" onClick={() => setReplyTarget(null)} aria-label={tr("답장 취소", "Cancel reply", "取消回复")}>
+                      <X size={17} />
+                    </button>
+                  </div>
+                )}
+                <div className="chat-composer-row">
+                  <input
+                    className="chat-input"
+                    placeholder={tr("메시지를 입력하세요", "Type a message", "输入消息")}
+                    value={messageInput}
+                    onChange={(e) => setMessageInput(e.target.value)}
+                    onFocus={() => requestAnimationFrame(() => {
+                      const box = chatMessagesRef.current;
+                      if (box) box.scrollTop = box.scrollHeight;
+                    })}
+                    enterKeyHint="send"
+                    autoComplete="off"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void sendMessage();
+                      }
+                    }}
+                  />
+                  <button className="chat-send" onClick={sendMessage} disabled={!messageInput.trim()}>
+                    {tr("보내기", "Send", "发送")}
+                  </button>
+                </div>
               </div>
+
+              {chatActionMessage && (
+                <div className="chat-action-backdrop" onPointerDown={(event) => event.target === event.currentTarget && setChatActionMessage(null)}>
+                  <div className="chat-action-sheet" role="dialog" aria-modal="true" aria-label={tr("메시지 메뉴", "Message actions", "消息操作")}>
+                    <div className="chat-action-handle" />
+                    <p>{chatActionMessage.text}</p>
+                    <div className="chat-action-buttons">
+                      <button type="button" onClick={() => selectReplyTarget(chatActionMessage)}>
+                        <Reply size={19} /> {tr("답장", "Reply", "回复")}
+                      </button>
+                      <button type="button" onClick={() => void toggleMessageHeart(chatActionMessage)}>
+                        <Heart size={19} fill={chatActionMessage.heartBy?.some((email) => email.toLowerCase() === currentChatEmail) ? "currentColor" : "none"} />
+                        {chatActionMessage.heartBy?.some((email) => email.toLowerCase() === currentChatEmail)
+                          ? tr("하트 취소", "Remove heart", "取消爱心")
+                          : tr("하트", "Heart", "爱心")}
+                      </button>
+                    </div>
+                    <button type="button" className="chat-action-cancel" onClick={() => setChatActionMessage(null)}>
+                      {tr("취소", "Cancel", "取消")}
+                    </button>
+                  </div>
+                </div>
+              )}
             </motion.section>
           )}
 
           {mode === "characters" && (
             <CharacterWorld key="characters" lang={lang} onBack={goToHome} />
+          )}
+
+          {mode === "album" && (
+            <React.Suspense fallback={<div className="album-route-loading">{tr("앨범을 여는 중...", "Opening album...", "正在打开相册…")}</div>}>
+              <Album key="album" lang={lang} nickname={nickname} onBack={goToHome} />
+            </React.Suspense>
           )}
 
           {mode === "topics" && (
