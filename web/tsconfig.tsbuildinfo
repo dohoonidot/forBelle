@@ -1,1 +1,1 @@
-{"root":["./src/Album.tsx","./src/App.tsx","./src/CharacterWorld.tsx","./src/albumImage.ts","./src/firebase.ts","./src/firebaseConfig.ts","./src/main.tsx","./src/songs.ts","./src/supabase.ts","./src/vite-env.d.ts"],"version":"5.9.3"}
+{"root":["./src/album.tsx","./src/app.tsx","./src/characterworld.tsx","./src/albumimage.ts","./src/firebase.ts","./src/firebaseconfig.ts","./src/main.tsx","./src/songs.ts","./src/supabase.ts","./src/vite-env.d.ts"],"version":"5.9.3"}

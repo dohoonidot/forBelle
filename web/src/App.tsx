@@ -4,9 +4,9 @@ import { songs, Song } from "./songs";
 import { motion, AnimatePresence } from "framer-motion";
 import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, writeBatch, where } from "firebase/firestore";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { auth, db, storage, isFirebaseConfigured } from "./firebase";
-import CharacterWorld from "./CharacterWorld";
-import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
+import { auth, db, isFirebaseConfigured } from "./firebase";
+import CharacterWorld, { CHARACTER_STORAGE_KEY, CharacterProfile, loadLocalProfiles } from "./CharacterWorld";
+import { compressAvatarDataUrl } from "./albumImage";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
@@ -472,6 +472,10 @@ const downloadText = (filename: string, content: string) => {
   URL.revokeObjectURL(url);
 };
 
+// Legacy default names of the diary root folder ("오늘의 주제" era).
+// Folders still carrying one of these exact names are renamed once to the new default.
+const LEGACY_ROOT_FOLDER_NAMES = ["오늘의 주제", "Daily Topics", "今日主题"];
+
 const App: React.FC = () => {
   const playerRef = useRef<any>(null);
   const playerHostRef = useRef<HTMLDivElement | null>(null);
@@ -546,7 +550,11 @@ const App: React.FC = () => {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [nickname, setNickname] = useState("");
-  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string>("");
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string>(() => localStorage.getItem("belle_profile_photo") || "");
+  const [coupleProfiles, setCoupleProfiles] = useState<Record<"belle" | "partner", CharacterProfile>>(loadLocalProfiles);
+  const [belleSpecies, setBelleSpecies] = useState<"cat" | "rabbit">(() =>
+    loadLocalProfiles().belle.species === "rabbit" ? "rabbit" : "cat"
+  );
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
@@ -692,6 +700,7 @@ const App: React.FC = () => {
   };
 
   const currentChatEmail = auth?.currentUser?.email?.toLowerCase() || localStorage.getItem("belle_user_email")?.toLowerCase() || "";
+  const currentUserRole: "belle" | "partner" = currentChatEmail === "belle@kim.com" ? "belle" : "partner";
   const lastOwnMessageIndex = messages.reduce(
     (lastIndex, message, index) => message.createdBy?.toLowerCase() === currentChatEmail ? index : lastIndex,
     -1
@@ -709,7 +718,10 @@ const App: React.FC = () => {
       }
       const data = snap.data() as Profile;
       setNickname(data.nickname ?? "");
-      setProfilePhotoUrl(data.photoURL ?? "");
+      if (data.photoURL) {
+        setProfilePhotoUrl(data.photoURL);
+        localStorage.setItem("belle_profile_photo", data.photoURL);
+      }
       if (data.lang === "ko" || data.lang === "en" || data.lang === "zh") {
         setLang(data.lang);
       }
@@ -722,26 +734,75 @@ const App: React.FC = () => {
   const saveProfile = async () => {
     if (!firebaseReady || !auth.currentUser) return;
     const trimmed = nickname.trim();
-    await setDoc(
-      doc(db, "profiles", auth.currentUser.uid),
-      { nickname: trimmed, lang, photoURL: profilePhotoUrl || "", updatedAt: serverTimestamp() },
-      { merge: true }
-    );
+    const role = auth.currentUser.email?.toLowerCase() === "belle@kim.com" ? "belle" : "partner";
+    if (trimmed) {
+      setCoupleProfiles((prev) => {
+        const next = { ...prev, [role]: { ...prev[role], name: trimmed, photoUrl: profilePhotoUrl || prev[role].photoUrl } };
+        localStorage.setItem(CHARACTER_STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
+    }
+    await Promise.allSettled([
+      setDoc(
+        doc(db, "profiles", auth.currentUser.uid),
+        { nickname: trimmed, lang, photoURL: profilePhotoUrl || "", updatedAt: serverTimestamp() },
+        { merge: true }
+      ),
+      ...(trimmed
+        ? [
+            setDoc(
+              doc(db, "couple_characters", role),
+              { name: trimmed, photoUrl: profilePhotoUrl || "", ownerEmail: auth.currentUser.email || "", updatedAt: serverTimestamp() },
+              { merge: true }
+            )
+          ]
+        : [])
+    ]);
     setProfileMessage(tr("닉네임이 변경되었습니다.", "Nickname updated.", "昵称已更新。"));
   };
 
+  const applyUserPhotoUrl = async (dataUrl: string) => {
+    setProfilePhotoUrl(dataUrl);
+    if (dataUrl) {
+      localStorage.setItem("belle_profile_photo", dataUrl);
+    } else {
+      localStorage.removeItem("belle_profile_photo");
+    }
+
+    const role = auth?.currentUser?.email?.toLowerCase() === "belle@kim.com" ? "belle" : "partner";
+    const localChars = loadLocalProfiles();
+    localChars[role] = { ...localChars[role], photoUrl: dataUrl };
+    localStorage.setItem(CHARACTER_STORAGE_KEY, JSON.stringify(localChars));
+    setCoupleProfiles(localChars);
+
+    if (firebaseReady && auth.currentUser) {
+      await Promise.allSettled([
+        setDoc(
+          doc(db, "profiles", auth.currentUser.uid),
+          { photoURL: dataUrl, updatedAt: serverTimestamp() },
+          { merge: true }
+        ),
+        setDoc(
+          doc(db, "couple_characters", role),
+          { photoUrl: dataUrl, ownerEmail: auth.currentUser.email || "", updatedAt: serverTimestamp() },
+          { merge: true }
+        )
+      ]);
+    }
+  };
+
   const handleAvatarUpload = async (file: File) => {
-    if (!firebaseReady || !auth.currentUser) return;
-    const ref = storageRef(storage, `avatars/${auth.currentUser.uid}`);
-    await uploadBytes(ref, file);
-    const url = await getDownloadURL(ref);
-    setProfilePhotoUrl(url);
-    await setDoc(
-      doc(db, "profiles", auth.currentUser.uid),
-      { photoURL: url, updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-    setProfileMessage(tr("프로필 사진이 업데이트되었습니다.", "Profile photo updated.", "头像已更新。"));
+    setProfileLoading(true);
+    setProfileMessage(null);
+    try {
+      const dataUrl = await compressAvatarDataUrl(file, 256);
+      await applyUserPhotoUrl(dataUrl);
+      setProfileMessage(tr("프로필 사진이 업데이트되었습니다.", "Profile photo updated.", "头像已更新。"));
+    } catch {
+      setProfileMessage(tr("사진을 불러오지 못했어요. 다른 이미지로 시도해 주세요.", "Could not load this image. Please try another photo.", "无法读取该照片，请尝试其他图片。"));
+    } finally {
+      setProfileLoading(false);
+    }
   };
 
   const completeOnboarding = async () => {
@@ -768,7 +829,7 @@ const App: React.FC = () => {
 
   const defaultTopicName = (key: string, langValue: Lang) => {
     if (key === "root_folder") {
-      return langValue === "en" ? "Daily Topics" : langValue === "zh" ? "今日主题" : "오늘의 주제";
+      return langValue === "en" ? "Our Diary" : langValue === "zh" ? "我们俩的日记" : "둘만의 다이어리";
     }
     if (key === "root_note") {
       return langValue === "en" ? "First note" : langValue === "zh" ? "第一条笔记" : "첫 노트";
@@ -839,6 +900,12 @@ const App: React.FC = () => {
     const unsub = onSnapshot(
       q,
       (snapshot) => {
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as { name?: string; defaultKey?: string };
+          if (data.defaultKey === "root_folder" && data.name && LEGACY_ROOT_FOLDER_NAMES.includes(data.name)) {
+            void setDoc(docSnap.ref, { name: defaultTopicName("root_folder", lang) }, { merge: true }).catch(() => {});
+          }
+        });
         const items = snapshot.docs.map((docSnap) => {
           const data = docSnap.data() as {
             name?: string;
@@ -1317,6 +1384,37 @@ const App: React.FC = () => {
     });
     return () => unsub();
   }, [firebaseReady]);
+
+  useEffect(() => {
+    if (!adminAuthed || !firebaseReady || !db) return;
+    const unsubs = (["belle", "partner"] as const).map((role) =>
+      onSnapshot(
+        doc(db, "couple_characters", role),
+        (snap) => {
+          if (!snap.exists()) return;
+          const remote = snap.data() as Partial<CharacterProfile>;
+          setCoupleProfiles((prev) => {
+            const next = {
+              ...prev,
+              [role]: {
+                ...prev[role],
+                ...remote,
+                role,
+                species: role === "partner" ? "dog" : remote.species === "rabbit" ? "rabbit" : "cat"
+              }
+            };
+            localStorage.setItem(CHARACTER_STORAGE_KEY, JSON.stringify(next));
+            if (role === "belle") {
+              setBelleSpecies(next.belle.species === "rabbit" ? "rabbit" : "cat");
+            }
+            return next;
+          });
+        },
+        () => {}
+      )
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [adminAuthed, firebaseReady]);
 
   useEffect(() => {
     if (!adminAuthed || mode !== "message") return;
@@ -2027,11 +2125,11 @@ const App: React.FC = () => {
               </button>
               <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToTopics}>
                 <FolderPlus size={16} />
-                {tr("오늘의 주제", "Daily Topics", "今日主题")}
+                {tr("둘만의 다이어리", "Our Diary", "我们俩的日记")}
               </button>
               <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToCharacters}>
                 <PawPrint size={16} />
-                {tr("우리 캐릭터", "Our Characters", "我们的角色")}
+                {tr("둘만의 정원", "Our Garden", "我们俩的花园")}
               </button>
               <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={goToAlbum}>
                 <Images size={16} />
@@ -2134,18 +2232,113 @@ const App: React.FC = () => {
                     />
                     <div className="couple-photo-overlay">
                       <div className="couple-photo-top-bar">
-                        <span className="couple-tag location">
-                          <MapPin size={14} />
-                          {tr("부산 (Busan)", "Busan, Korea", "韩国釜山")}
+                        {/* Top-Left: Belle Profile Badge */}
+                        <button
+                          type="button"
+                          className={`couple-corner-profile left ${currentUserRole === "belle" ? "is-me" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (currentUserRole === "belle") setShowSettings(true);
+                            else goToCharacters();
+                          }}
+                          title={
+                            currentUserRole === "belle"
+                              ? tr("내 프로필 설정 열기", "Open my profile settings", "打开我的个人设置")
+                              : tr("둘만의 정원 보기", "Visit Our Garden", "查看我们俩的花园")
+                          }
+                        >
+                          <div className="corner-avatar-wrap">
+                            <img
+                              src={
+                                (currentUserRole === "belle" ? profilePhotoUrl : "") ||
+                                coupleProfiles.belle.photoUrl ||
+                                `${import.meta.env.BASE_URL}characters/belle-${belleSpecies}.webp`
+                              }
+                              alt={coupleProfiles.belle.name || "Belle"}
+                              className="corner-avatar-img"
+                            />
+                            <span className="corner-pet-badge">
+                              <img src={`${import.meta.env.BASE_URL}characters/belle-${belleSpecies}.webp`} alt="" />
+                            </span>
+                          </div>
+                          <div className="corner-profile-meta">
+                            <strong>
+                              {coupleProfiles.belle.name || "Belle"}
+                              {currentUserRole === "belle" && <em className="corner-me-dot">ME</em>}
+                            </strong>
+                            <span>
+                              {coupleProfiles.belle.message ||
+                                (coupleProfiles.belle.birthday
+                                  ? `🎂 ${coupleProfiles.belle.birthday}`
+                                  : tr("오늘도 같이 놀자 ♡", "Lovely Belle ♡", "今天也一起玩吧 ♡"))}
+                            </span>
+                          </div>
+                        </button>
+
+                        {/* Center Heart Pill */}
+                        <span className="couple-corner-heart" aria-hidden="true">
+                          <Heart size={14} fill="#FF6B8B" color="#FF6B8B" />
                         </span>
-                        <span className="couple-tag zoom-hint">
-                          <Maximize2 size={12} />
-                          {tr("사진 확대", "Enlarge", "放大照片")}
-                        </span>
+
+                        {/* Top-Right: Partner Profile Badge */}
+                        <button
+                          type="button"
+                          className={`couple-corner-profile right ${currentUserRole === "partner" ? "is-me" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (currentUserRole === "partner") setShowSettings(true);
+                            else goToCharacters();
+                          }}
+                          title={
+                            currentUserRole === "partner"
+                              ? tr("내 프로필 설정 열기", "Open my profile settings", "打开我的个人设置")
+                              : tr("둘만의 정원 보기", "Visit Our Garden", "查看我们俩的花园")
+                          }
+                        >
+                          <div className="corner-profile-meta align-right">
+                            <strong>
+                              {currentUserRole === "partner" && <em className="corner-me-dot">ME</em>}
+                              {(currentUserRole === "partner" && nickname.trim()) ||
+                                (coupleProfiles.partner.name && coupleProfiles.partner.name !== "우리 강아지"
+                                  ? coupleProfiles.partner.name
+                                  : tr("든든한 내 편", "My Partner", "守护你的我"))}
+                            </strong>
+                            <span>
+                              {coupleProfiles.partner.message ||
+                                (coupleProfiles.partner.birthday
+                                  ? `🎂 ${coupleProfiles.partner.birthday}`
+                                  : tr("Belle 곁을 지키는 중", "Always by Belle's side", "一直守护在 Belle 身边"))}
+                            </span>
+                          </div>
+                          <div className="corner-avatar-wrap">
+                            <img
+                              src={
+                                (currentUserRole === "partner" ? profilePhotoUrl : "") ||
+                                coupleProfiles.partner.photoUrl ||
+                                `${import.meta.env.BASE_URL}characters/partner-puppy.webp`
+                              }
+                              alt={coupleProfiles.partner.name || "Partner"}
+                              className="corner-avatar-img"
+                            />
+                            <span className="corner-pet-badge">
+                              <img src={`${import.meta.env.BASE_URL}characters/partner-puppy.webp`} alt="" />
+                            </span>
+                          </div>
+                        </button>
                       </div>
 
                       <div className="couple-photo-bottom-bar">
                         <div className="couple-memory-caption">
+                          <div className="couple-caption-tags">
+                            <span className="couple-tag location">
+                              <MapPin size={13} />
+                              {tr("부산 (Busan)", "Busan, Korea", "韩国釜山")}
+                            </span>
+                            <span className="couple-tag zoom-hint">
+                              <Maximize2 size={11} />
+                              {tr("사진 확대", "Enlarge", "放大照片")}
+                            </span>
+                          </div>
                           <h3>{tr("우리의 이야기가 시작된 곳", "Where our story began", "我们故事开始的地方")}</h3>
                           <p>{tr("2025. 09. 23 • 부산 광안리 해변 & 부산대교", "Sep 23, 2025 • Busan Beach & Grand Bridge", "2025. 09. 23 • 釜山海滩与大海桥")}</p>
                         </div>
@@ -2280,9 +2473,9 @@ const App: React.FC = () => {
                       <div className="couple-action-icon">
                         <FolderPlus size={22} />
                       </div>
-                      <div className="couple-action-title">{tr("오늘의 주제 & 일기", "Our Diary", "今日主题与日记")}</div>
+                      <div className="couple-action-title">{tr("둘만의 다이어리", "Our Diary", "我们俩的日记")}</div>
                       <div className="couple-action-desc">
-                        {tr("둘만의 소중한 기록", "Shared notes & memories", "记录专属回忆")}
+                        {tr("함께 쓰는 우리의 기록", "Notes we write together", "一起书写的回忆")}
                       </div>
                     </button>
 
@@ -2298,13 +2491,13 @@ const App: React.FC = () => {
 
                     <button type="button" className="couple-action-card characters" onClick={goToCharacters}>
                       <div className="character-card-preview" aria-hidden="true">
-                        <img src={`${import.meta.env.BASE_URL}characters/belle-cat.webp`} alt="" />
+                        <img src={`${import.meta.env.BASE_URL}characters/belle-${belleSpecies}.webp`} alt="" />
                         <img src={`${import.meta.env.BASE_URL}characters/partner-puppy.webp`} alt="" />
                       </div>
                       <div className="character-card-copy">
                         <div className="couple-action-icon"><PawPrint size={20} /></div>
                         <div>
-                          <div className="couple-action-title">{tr("우리 캐릭터", "Our Characters", "我们的角色")}</div>
+                          <div className="couple-action-title">{tr("둘만의 정원", "Our Garden", "我们俩的花园")}</div>
                           <div className="couple-action-desc">
                             {tr("둘이 뛰노는 작은 정원", "A garden where we wander", "一起玩耍的小花园")}
                           </div>
@@ -2708,7 +2901,14 @@ const App: React.FC = () => {
           )}
 
           {mode === "characters" && (
-            <CharacterWorld key="characters" lang={lang} onBack={goToHome} />
+            <CharacterWorld
+              key="characters"
+              lang={lang}
+              onBack={goToHome}
+              userPhotoUrl={profilePhotoUrl}
+              onUserPhotoChange={applyUserPhotoUrl}
+              onBelleSpeciesChange={setBelleSpecies}
+            />
           )}
 
           {mode === "album" && (
@@ -2728,7 +2928,7 @@ const App: React.FC = () => {
               <header className="topics-topbar">
                 <button className="topics-home-button" onClick={goToHome} aria-label={tr("홈으로", "Back home", "返回主页")}><Home size={19} /></button>
                 <div className="topics-heading">
-                  <span><Heart size={9} fill="currentColor" /> {tr("오늘의 주제 · 함께 쓰는 노트", "DAILY TOPICS · SHARED NOTES", "今日主题 · 共享笔记")}</span>
+                  <span><Heart size={9} fill="currentColor" /> {tr("둘만의 다이어리 · 함께 쓰는 노트", "OUR DIARY · SHARED NOTES", "我们俩的日记 · 共享笔记")}</span>
                   <h2>{selectedTopic?.name || tr("노트를 선택하세요", "Choose a note", "请选择笔记")}</h2>
                 </div>
                 <button
@@ -3215,30 +3415,46 @@ const App: React.FC = () => {
                 </button>
               </div>
               <p className="label" style={{ marginTop: 16, marginBottom: 8 }}>
-                {tr("프로필 사진", "Profile photo", "头像")}
+                {tr("프로필 사진 (본인 사진 등록)", "Profile photo (Upload your photo)", "头像（上传本人照片）")}
               </p>
-              <div className="row" style={{ gap: 8, alignItems: "center" }}>
+              <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 {profilePhotoUrl ? (
                   <img
                     src={profilePhotoUrl}
                     alt="profile"
-                    style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }}
+                    style={{ width: 48, height: 48, borderRadius: "50%", objectFit: "cover", border: "2px solid #e5d8cd" }}
                   />
                 ) : (
-                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#eee" }} />
+                  <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#f2ebe4", border: "1px dashed #cbbba9" }} />
                 )}
-                <label className="btn small" style={{ cursor: "pointer" }}>
-                  {tr("업로드", "Upload", "上传")}
+                <label className="btn small" style={{ cursor: "pointer", minHeight: 44 }}>
+                  <Upload size={14} />
+                  {profilePhotoUrl ? tr("사진 변경", "Change photo", "更换照片") : tr("내 사진 등록", "Upload photo", "上传照片")}
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,.heic,.heif"
                     hidden
                     onChange={(e) => {
                       const file = e.target.files?.[0];
+                      e.target.value = "";
                       if (file) void handleAvatarUpload(file);
                     }}
                   />
                 </label>
+                {profilePhotoUrl && (
+                  <button
+                    type="button"
+                    className="btn small"
+                    style={{ minHeight: 44 }}
+                    onClick={() => {
+                      void applyUserPhotoUrl("");
+                      setProfileMessage(tr("프로필 사진이 삭제되었습니다.", "Profile photo removed.", "头像已删除。"));
+                    }}
+                  >
+                    <X size={14} />
+                    {tr("삭제", "Remove", "删除")}
+                  </button>
+                )}
               </div>
               {profileMessage && (
                 <p className="label" style={{ marginTop: 8, color: "#2E7D32" }}>

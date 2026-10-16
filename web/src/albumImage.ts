@@ -116,3 +116,30 @@ export const compressAlbumImage = async (file: File): Promise<CompressedAlbumIma
   }
 };
 
+export const compressAvatarDataUrl = async (file: File, size = 256): Promise<string> => {
+  validateAlbumFile(file);
+  const source = await loadImage(file);
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  try {
+    const original = getDimensions(source);
+    const side = Math.min(original.width, original.height);
+    const sx = Math.max(0, Math.round((original.width - side) / 2));
+    const sy = Math.max(0, Math.round((original.height - side) / 2));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("canvas_unavailable");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(source, sx, sy, side, side, 0, 0, size, size);
+    const webpUrl = canvas.toDataURL("image/webp", 0.84);
+    if (webpUrl.startsWith("data:image/webp")) return webpUrl;
+    return canvas.toDataURL("image/jpeg", 0.84);
+  } finally {
+    canvas.width = 1;
+    canvas.height = 1;
+    if ("close" in source && typeof source.close === "function") source.close();
+  }
+};
+
+
