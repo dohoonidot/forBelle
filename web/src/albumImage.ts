@@ -8,18 +8,23 @@ export type CompressedAlbumImage = {
 
 const MAX_SOURCE_BYTES = 30 * 1024 * 1024;
 export const MAX_ALBUM_FILES = 12;
+const FALLBACK_IMAGE_EXTENSION = /\.(?:avif|gif|hei[cf]|jpe?g|png|webp)$/i;
+const HEIC_EXTENSION = /\.(?:hei[cf])$/i;
 
-const loadImage = async (file: File): Promise<ImageBitmap | HTMLImageElement> => {
+const isHeicFile = (file: File) =>
+  /image\/(?:hei[cf]|heif-sequence|heic-sequence)/i.test(file.type) || HEIC_EXTENSION.test(file.name);
+
+const loadImageBlob = async (blob: Blob): Promise<ImageBitmap | HTMLImageElement> => {
   if ("createImageBitmap" in window) {
     try {
-      return await createImageBitmap(file, { imageOrientation: "from-image" });
+      return await createImageBitmap(blob, { imageOrientation: "from-image" });
     } catch {
       // iOS can reject HEIC here even when an <img> element can decode it.
     }
   }
 
   return await new Promise<HTMLImageElement>((resolve, reject) => {
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(blob);
     const image = new Image();
     image.onload = () => {
       URL.revokeObjectURL(url);
@@ -31,6 +36,24 @@ const loadImage = async (file: File): Promise<ImageBitmap | HTMLImageElement> =>
     };
     image.src = url;
   });
+};
+
+const loadImage = async (file: File): Promise<ImageBitmap | HTMLImageElement> => {
+  try {
+    return await loadImageBlob(file);
+  } catch (nativeError) {
+    if (!isHeicFile(file)) throw nativeError;
+
+    try {
+      const { default: heic2any } = await import("heic2any");
+      const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
+      const jpeg = Array.isArray(converted) ? converted[0] : converted;
+      if (!jpeg) throw new Error("heic_decode_failed");
+      return await loadImageBlob(jpeg);
+    } catch {
+      throw new Error("heic_decode_failed");
+    }
+  }
 };
 
 const getDimensions = (source: ImageBitmap | HTMLImageElement) => ({
@@ -50,19 +73,27 @@ const renderWebp = async (
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const context = canvas.getContext("2d", { alpha: false });
-  if (!context) throw new Error("canvas_unavailable");
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  context.drawImage(source, 0, 0, width, height);
+  try {
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("canvas_unavailable");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(source, 0, 0, width, height);
 
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", quality));
-  if (!blob || blob.type !== "image/webp") throw new Error("webp_unsupported");
-  return { blob, width, height };
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+    if (!blob || blob.type !== "image/webp") throw new Error("webp_unsupported");
+    return { blob, width, height };
+  } finally {
+    // Large iPhone photos can otherwise leave two full canvas buffers alive at once.
+    canvas.width = 1;
+    canvas.height = 1;
+  }
 };
 
 export const validateAlbumFile = (file: File) => {
-  if (!file.type.startsWith("image/")) throw new Error("not_image");
+  if (!file.type.startsWith("image/") && !FALLBACK_IMAGE_EXTENSION.test(file.name)) {
+    throw new Error("not_image");
+  }
   if (file.size > MAX_SOURCE_BYTES) throw new Error("too_large");
 };
 
@@ -70,10 +101,9 @@ export const compressAlbumImage = async (file: File): Promise<CompressedAlbumIma
   validateAlbumFile(file);
   const source = await loadImage(file);
   try {
-    const [display, thumbnail] = await Promise.all([
-      renderWebp(source, 2048, 0.82),
-      renderWebp(source, 640, 0.76)
-    ]);
+    // Render sequentially to keep peak memory low on iPhone Safari.
+    const display = await renderWebp(source, 2048, 0.82);
+    const thumbnail = await renderWebp(source, 640, 0.76);
     return {
       display: display.blob,
       thumbnail: thumbnail.blob,

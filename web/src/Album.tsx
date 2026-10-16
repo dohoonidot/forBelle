@@ -64,6 +64,11 @@ const today = () => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 };
 
+const createPhotoId = () => {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
+};
+
 const Album: React.FC<Props> = ({ lang, nickname, onBack }) => {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const touchStartRef = useRef<number | null>(null);
@@ -197,6 +202,18 @@ const Album: React.FC<Props> = ({ lang, nickname, onBack }) => {
     setUploadItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
   };
 
+  const uploadErrorMessage = (error: unknown) => {
+    const code = error instanceof Error ? error.message : "upload_failed";
+    if (code === "too_large") return tr("30MB가 넘는 사진이에요.", "This photo is over 30MB.", "这张照片超过 30MB。");
+    if (code === "not_image") return tr("지원하지 않는 파일 형식이에요.", "This file type is not supported.", "不支持此文件格式。");
+    if (code === "heic_decode_failed") return tr("HEIC 사진을 변환하지 못했어요. 사진 앱에서 JPG로 공유한 뒤 다시 시도해주세요.", "Could not convert this HEIC photo. Share it as a JPG and try again.", "无法转换此 HEIC 照片，请以 JPG 分享后重试。");
+    if (code === "decode_failed") return tr("사진을 읽지 못했어요. 파일이 손상됐는지 확인해주세요.", "Could not read this photo. Check whether the file is damaged.", "无法读取照片，请检查文件是否损坏。");
+    if (code === "webp_unsupported" || code === "canvas_unavailable") return tr("이 브라우저에서는 사진 압축을 지원하지 않아요.", "This browser cannot compress the photo.", "此浏览器无法压缩照片。");
+    if (/row-level security|unauthorized|forbidden|jwt|403/i.test(code)) return tr("사진 저장 권한을 확인하지 못했어요. 다시 로그인해주세요.", "Photo permission failed. Please sign in again.", "无法确认照片权限，请重新登录。");
+    if (/fetch|network|timeout/i.test(code)) return tr("네트워크 연결이 불안정해요. 잠시 후 다시 시도해주세요.", "The network is unstable. Try again shortly.", "网络不稳定，请稍后重试。");
+    return tr("업로드하지 못했어요. 잠시 후 다시 시도해주세요.", "Upload failed. Please try again shortly.", "上传失败，请稍后重试。");
+  };
+
   const upload = async () => {
     if (!supabase || !uid || files.length === 0 || uploading) return;
     setUploading(true);
@@ -205,7 +222,7 @@ const Album: React.FC<Props> = ({ lang, nickname, onBack }) => {
 
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
-      const photoId = crypto.randomUUID();
+      const photoId = createPhotoId();
       const basePath = `album/${uid}/${photoId}`;
       const displayPath = `${basePath}/display.webp`;
       const thumbnailPath = `${basePath}/thumb.webp`;
@@ -249,8 +266,7 @@ const Album: React.FC<Props> = ({ lang, nickname, onBack }) => {
         setItemProgress(index, { progress: 100 });
       } catch (error) {
         if (uploadedPaths.length) await supabase.storage.from(ALBUM_BUCKET).remove(uploadedPaths);
-        const message = error instanceof Error ? error.message : "upload_failed";
-        setItemProgress(index, { progress: 0, error: message });
+        setItemProgress(index, { progress: 0, error: uploadErrorMessage(error) });
       }
     }
 
@@ -376,7 +392,7 @@ const Album: React.FC<Props> = ({ lang, nickname, onBack }) => {
             <motion.section className="album-upload-sheet" initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 30, stiffness: 330 }}>
               <div className="album-sheet-handle" />
               <div className="album-sheet-title"><div><span>{tr("새로운 기억", "New memory", "新的回忆")}</span><h2>{tr("사진을 앨범에 놓기", "Add to our album", "放入我们的相册")}</h2></div><button onClick={() => !uploading && setUploadOpen(false)}><X /></button></div>
-              <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(event) => chooseFiles(event.target.files)} />
+              <input ref={fileRef} type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" multiple hidden onChange={(event) => chooseFiles(event.target.files)} />
               <button className="album-file-picker" onClick={() => fileRef.current?.click()} disabled={uploading}>
                 <ImagePlus size={25} /><span><strong>{files.length ? tr(`${files.length}장 선택됨`, `${files.length} selected`, `已选择 ${files.length} 张`) : tr("아이폰 사진첩 열기", "Open photo library", "打开照片图库")}</strong><small>{tr("최대 12장 · 자동 WebP 압축", "Up to 12 · automatic WebP compression", "最多 12 张 · 自动 WebP 压缩")}</small></span>
               </button>
@@ -386,7 +402,7 @@ const Album: React.FC<Props> = ({ lang, nickname, onBack }) => {
                 <label className="full"><span>{tr("장소", "Place", "地点")}</span><input value={location} maxLength={60} onChange={(event) => setLocation(event.target.value)} placeholder={tr("예: 광안리 바다", "e.g. Gwangalli Beach", "例如：广安里海边")} /></label>
                 <label className="full"><span>{tr("한 줄 기억", "A little note", "一句回忆")}</span><textarea value={caption} maxLength={180} onChange={(event) => setCaption(event.target.value)} placeholder={tr("그날의 마음을 짧게 남겨요", "Leave a small note from that day", "写下那天的一点心情")} /></label>
               </div>
-              {uploadItems.length > 0 && <div className="album-upload-list">{uploadItems.map((item, index) => <div key={`${item.name}-${index}`} className={item.error ? "failed" : ""}><span>{item.name}</span><b>{item.error ? tr("실패", "Failed", "失败") : `${item.progress}%`}</b><i style={{ width: `${item.progress}%` }} /></div>)}</div>}
+              {uploadItems.length > 0 && <div className="album-upload-list">{uploadItems.map((item, index) => <div key={`${item.name}-${index}`} className={item.error ? "failed" : ""}><span><strong>{item.name}</strong>{item.error && <small>{item.error}</small>}</span><b>{item.error ? tr("실패", "Failed", "失败") : `${item.progress}%`}</b><i style={{ width: `${item.progress}%` }} /></div>)}</div>}
               {formError && <p className="album-form-error">{formError}</p>}
               <button className="album-submit" disabled={!files.length || uploading || !isSupabaseConfigured} onClick={upload}>{uploading ? <><LoaderCircle className="spin" size={18} /> {tr("사진을 정리하는 중", "Preparing photos", "正在整理照片")}</> : tr("우리 앨범에 저장", "Save to our album", "保存到我们的相册")}</button>
             </motion.section>

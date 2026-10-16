@@ -19,8 +19,8 @@
   grid-template-columns: 48px 1fr auto;
   align-items: center;
   gap: 14px;
-  min-height: 92px;
-  padding: max(16px, env(safe-area-inset-top)) clamp(20px, 5vw, 72px) 14px;
+  min-height: 78px;
+  padding: max(11px, env(safe-area-inset-top)) clamp(18px, 4vw, 56px) 10px;
   border-bottom: 1px solid rgba(225, 212, 200, .72);
   background: rgba(255, 253, 249, .86);
   backdrop-filter: blur(18px);
@@ -69,20 +69,20 @@
 .album-intro {
   width: min(1120px, calc(100% - 40px));
   margin: 0 auto;
-  padding: clamp(50px, 9vw, 105px) 0 clamp(34px, 6vw, 68px);
+  padding: clamp(28px, 5vw, 56px) 0 clamp(24px, 4vw, 42px);
 }
-.album-intro h2 { max-width: 760px; margin: 10px 0 12px; font-size: clamp(36px, 7vw, 78px); line-height: 1.12; letter-spacing: -.035em; }
+.album-intro h2 { max-width: 760px; margin: 8px 0 9px; font-size: clamp(32px, 5vw, 58px); line-height: 1.1; letter-spacing: -.035em; }
 .album-intro > p:last-child { margin: 0; color: var(--album-muted); font-size: clamp(14px, 2vw, 17px); }
 
 .album-filters {
   position: sticky;
   z-index: 20;
-  top: 91px;
+  top: 77px;
   display: flex;
   gap: 8px;
   width: min(1120px, calc(100% - 40px));
-  margin: 0 auto 34px;
-  padding: 10px 0;
+  margin: 0 auto 24px;
+  padding: 8px 0;
   overflow-x: auto;
   scrollbar-width: none;
   background: linear-gradient(90deg, var(--album-paper) 88%, transparent);
@@ -102,8 +102,8 @@
 }
 .album-filters button.active { border-color: var(--album-ink); background: var(--album-ink); color: white; }
 
-.album-timeline { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 110px; }
-.album-month { margin-bottom: clamp(44px, 7vw, 82px); }
+.album-timeline { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 80px; }
+.album-month { margin-bottom: clamp(32px, 5vw, 58px); }
 .album-month-heading { display: grid; grid-template-columns: 28px auto 1fr; align-items: center; gap: 12px; margin-bottom: 18px; }
 .album-month-heading span { color: var(--album-rose); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
 .album-month-heading h3 { margin: 0; font-size: 20px; }
@@ -178,7 +178,9 @@
 .album-form-grid textarea:focus { border-color: #bfa28e; box-shadow: 0 0 0 3px rgba(191,162,142,.14); }
 .album-upload-list { display: grid; gap: 7px; margin-top: 15px; }
 .album-upload-list > div { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 7px 0 9px; overflow: hidden; color: var(--album-muted); font-size: 11px; }
-.album-upload-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-upload-list span { display: grid; min-width: 0; gap: 2px; }
+.album-upload-list span strong { overflow: hidden; color: inherit; font-size: inherit; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.album-upload-list span small { line-height: 1.35; white-space: normal; }
 .album-upload-list i { position: absolute; left: 0; bottom: 0; height: 2px; background: #bc756c; transition: width .25s; }
 .album-upload-list > div::after { content: ""; position: absolute; right: 0; bottom: 0; left: 0; z-index: -1; height: 2px; background: #eadfd5; }
 .album-upload-list .failed { color: #b54848; }
@@ -207,18 +209,25 @@
 @keyframes albumSpin { to { transform: rotate(360deg); } }
 
 @media (max-width: 760px) {
-  .album-header { grid-template-columns: 40px minmax(0, 1fr) auto; min-height: 76px; padding-right: 14px; padding-left: 14px; }
+  .album-header { grid-template-columns: 40px minmax(0, 1fr) auto; min-height: 64px; padding: max(7px, env(safe-area-inset-top)) 10px 7px; }
   .album-header > div > span { font-size: 7px; letter-spacing: .12em; }
-  .album-header h1 { font-size: 21px; }
+  .album-header h1 { font-size: 19px; }
   .album-upload-button { width: 44px; padding: 0; justify-content: center; }
   .album-upload-button span { display: none; }
-  .album-intro { width: calc(100% - 32px); padding: 50px 0 36px; }
-  .album-intro h2 { font-size: clamp(36px, 12vw, 52px); }
-  .album-filters { top: 75px; width: calc(100% - 28px); margin-bottom: 25px; }
-  .album-timeline { width: calc(100% - 20px); }
-  .album-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .album-intro { width: calc(100% - 28px); padding: 25px 0 20px; }
+  .album-intro h2 { max-width: 340px; margin-top: 6px; font-size: clamp(29px, 8.5vw, 38px); }
+  .album-intro > p:last-child { font-size: 12px; }
+  .album-filters { top: 63px; width: calc(100% - 20px); margin-bottom: 16px; padding: 6px 0; }
+  .album-filters button { min-height: 34px; padding: 0 12px; font-size: 11px; }
+  .album-timeline { width: calc(100% - 12px); padding-bottom: 70px; }
+  .album-month { margin-bottom: 30px; }
+  .album-month-heading { margin: 0 5px 10px; }
+  .album-month-heading h3 { font-size: 17px; }
+  .album-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
   .album-photo { border-radius: 2px; }
-  .album-photo-copy { inset: auto 9px 8px; }
+  .album-photo-copy { inset: auto 7px 6px; }
+  .album-photo-copy small { display: none; }
+  .album-photo-wide { aspect-ratio: 2 / 1.18; }
   .album-upload-sheet { padding: 10px 16px calc(16px + env(safe-area-inset-bottom)); }
   .album-form-grid { gap: 10px; }
   .album-lightbox { padding: 58px 12px calc(20px + env(safe-area-inset-bottom)); }

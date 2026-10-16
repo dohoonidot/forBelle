@@ -84,9 +84,11 @@ interface AlbumPhoto {
 ### Phase 1 — 업로드 파이프라인
 
 - [x] iPhone 사진 다중 선택
-- [x] 이미지 형식·개수·크기 검증
+- [x] JPG/JPEG/PNG/WebP/HEIC/HEIF 등 이미지 형식·개수·크기 검증
+- [x] Safari가 직접 읽지 못하는 HEIC/HEIF의 브라우저 내 JPEG 변환 대체 경로
 - [x] EXIF 방향을 브라우저 디코더 기준으로 보정
 - [x] display/thumbnail WebP 압축
+- [x] iPhone 메모리 절약을 위한 display/thumbnail 순차 처리와 캔버스 해제
 - [x] 파일별 진행 상태와 실패 표시
 - [x] Storage 업로드 후 Firestore 메타데이터 저장
 - [x] 중간 실패 시 이미 업로드한 파일 정리

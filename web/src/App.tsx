@@ -49,7 +49,15 @@ import {
   ArrowUpRight,
   LockKeyhole,
   PawPrint,
-  Reply
+  Reply,
+  Cloud,
+  CloudOff,
+  LoaderCircle,
+  Folder,
+  FileText,
+  MoreHorizontal,
+  PanelLeftOpen,
+  Plus
 } from "lucide-react";
 
 type Cue = {
@@ -94,12 +102,13 @@ type TopicNode = {
   defaultKey?: string;
 };
 
+type TopicSaveState = "idle" | "dirty" | "saving" | "saved" | "error";
+
 type Profile = {
   nickname?: string;
   lang?: Lang;
   onboardingDone?: boolean;
   photoURL?: string;
-  lineHeight?: number;
 };
 
 declare global {
@@ -165,18 +174,10 @@ const TopicTreeNode = ({
   const isSelected = selectedId === node.id || (isFolder && selectedFolderId === node.id);
 
   return (
-    <li style={{ marginBottom: 2, borderBottom: "1px solid #eee" }}>
+    <li className="topic-tree-item">
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "20px 16px 1fr",
-          alignItems: "center",
-          columnGap: 6,
-          padding: "4px 6px",
-          borderRadius: 6,
-          marginLeft: indent,
-          background: isSelected ? "#EEE7DD" : "transparent"
-        }}
+        className={`topic-tree-row ${isSelected ? "selected" : ""}`}
+        style={{ marginLeft: indent }}
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData("text/plain", node.id);
@@ -207,13 +208,13 @@ const TopicTreeNode = ({
         }}
       >
         {isFolder ? (
-          <button className="btn small" onClick={() => toggleFolder(node.id)} style={{ padding: "2px 4px" }}>
-            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <button className="topic-tree-toggle" onClick={() => toggleFolder(node.id)} aria-label={tr("폴더 펼치기", "Toggle folder", "展开文件夹")}>
+            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </button>
         ) : (
-          <div style={{ width: 20 }} />
+          <div className="topic-tree-toggle-spacer" />
         )}
-        <div style={{ width: 16, textAlign: "center" }}>{isFolder ? "📁" : "📄"}</div>
+        <div className="topic-tree-icon">{isFolder ? <Folder size={16} /> : <FileText size={16} />}</div>
         {isEditing ? (
           <input
             className="input"
@@ -229,12 +230,7 @@ const TopicTreeNode = ({
           />
         ) : (
           <button
-            className="btn small"
-            style={{
-              justifyContent: "flex-start",
-              padding: "2px 4px",
-              fontSize: 12
-            }}
+            className="topic-tree-name"
             onClick={() => {
               if (isFolder) {
                 toggleFolder(node.id);
@@ -247,6 +243,17 @@ const TopicTreeNode = ({
             {node.name}
           </button>
         )}
+        <button
+          className="topic-tree-more"
+          aria-label={tr("노트 메뉴", "Note menu", "笔记菜单")}
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onOpenContextMenu(rect.right - 180, rect.bottom + 4, node);
+          }}
+        >
+          <MoreHorizontal size={16} />
+        </button>
       </div>
       {isFolder && isExpanded && children.length > 0 && (
         <ul className="song-list" style={{ marginTop: 2 }}>
@@ -508,6 +515,9 @@ const App: React.FC = () => {
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [topicContent, setTopicContent] = useState("");
+  const [topicSaveState, setTopicSaveState] = useState<TopicSaveState>("idle");
+  const [topicsError, setTopicsError] = useState("");
+  const [topicActionBusy, setTopicActionBusy] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<string[]>([]);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [editingTopicName, setEditingTopicName] = useState("");
@@ -518,6 +528,9 @@ const App: React.FC = () => {
   } | null>(null);
   const initializingTopicsRef = useRef(false);
   const saveTopicTimer = useRef<number | null>(null);
+  const pendingTopicSaveRef = useRef<{ id: string; content: string } | null>(null);
+  const loadedTopicIdRef = useRef<string | null>(null);
+  const selectedTopicIdRef = useRef<string | null>(null);
   const [adminEmailInput, setAdminEmailInput] = useState(() => localStorage.getItem("belle_user_email") || "belle@kim.com");
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
   const [adminError, setAdminError] = useState<string | null>(null);
@@ -536,7 +549,6 @@ const App: React.FC = () => {
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string>("");
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
-  const [lineHeight, setLineHeight] = useState(0.5);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const [upcomingPreviewId, setUpcomingPreviewId] = useState<string | null>(null);
 
@@ -701,9 +713,6 @@ const App: React.FC = () => {
       if (data.lang === "ko" || data.lang === "en" || data.lang === "zh") {
         setLang(data.lang);
       }
-      if (typeof data.lineHeight === "number") {
-        setLineHeight(data.lineHeight);
-      }
       setShowSettings(!data.onboardingDone);
     } finally {
       setProfileLoading(false);
@@ -715,21 +724,10 @@ const App: React.FC = () => {
     const trimmed = nickname.trim();
     await setDoc(
       doc(db, "profiles", auth.currentUser.uid),
-      { nickname: trimmed, lang, photoURL: profilePhotoUrl || "", lineHeight, updatedAt: serverTimestamp() },
+      { nickname: trimmed, lang, photoURL: profilePhotoUrl || "", updatedAt: serverTimestamp() },
       { merge: true }
     );
     setProfileMessage(tr("닉네임이 변경되었습니다.", "Nickname updated.", "昵称已更新。"));
-  };
-
-  const updateLineHeight = async (value: number) => {
-    setLineHeight(value);
-    if (adminAuthed && firebaseReady && auth.currentUser) {
-      await setDoc(
-        doc(db, "profiles", auth.currentUser.uid),
-        { lineHeight: value, updatedAt: serverTimestamp() },
-        { merge: true }
-      );
-    }
   };
 
   const handleAvatarUpload = async (file: File) => {
@@ -799,6 +797,7 @@ const App: React.FC = () => {
     if (!firebaseReady || !adminAuthed) return;
     if (initializingTopicsRef.current) return;
     initializingTopicsRef.current = true;
+    setTopicsError("");
     try {
       const folderName = defaultTopicName("root_folder", lang);
       const noteName = defaultTopicName("root_note", lang);
@@ -821,9 +820,13 @@ const App: React.FC = () => {
         updatedAt: serverTimestamp()
       });
       setExpandedFolders((prev) => (prev.includes(folderRef.id) ? prev : [...prev, folderRef.id]));
+      selectedTopicIdRef.current = noteRef.id;
       setSelectedTopicId(noteRef.id);
       setSelectedFolderId(folderRef.id);
       setTopicContent("");
+      loadedTopicIdRef.current = null;
+    } catch {
+      setTopicsError(tr("기본 노트를 만들지 못했어요. 잠시 후 다시 시도해주세요.", "Could not create the first note. Try again shortly.", "无法创建初始笔记，请稍后重试。"));
     } finally {
       initializingTopicsRef.current = false;
     }
@@ -856,72 +859,98 @@ const App: React.FC = () => {
           };
         });
         setTopicNodes(items);
+        setTopicsError("");
         if (items.length === 0) {
+          selectedTopicIdRef.current = null;
           setSelectedTopicId(null);
           setSelectedFolderId(null);
           void createDefaultTopics();
         }
         setTopicsLoading(false);
       },
-      () => setTopicsLoading(false)
+      () => {
+        setTopicsLoading(false);
+        setTopicsError(tr("노트를 불러오지 못했어요. 연결 상태를 확인해주세요.", "Could not load notes. Check your connection.", "无法载入笔记，请检查网络连接。"));
+      }
     );
     return unsub;
   };
 
   const createTopicNode = async (type: "folder" | "file", parentId: string | null) => {
-    if (!firebaseReady || !adminAuthed) return;
-    const name = type === "folder" ? tr("새 폴더", "New folder", "新建文件夹") : tr("새 노트", "New note", "新建笔记");
-    const docRef = await addDoc(collection(db, "topics"), {
-      name,
-      type,
-      parentId: parentId ?? null,
-      content: "",
-      createdBy: auth.currentUser?.email ?? "",
-      updatedAt: serverTimestamp()
-    });
-    if (parentId) {
-      setExpandedFolders((prev) => (prev.includes(parentId) ? prev : [...prev, parentId]));
-      setSelectedFolderId(parentId);
+    if (!firebaseReady || !adminAuthed || topicActionBusy) return;
+    setTopicActionBusy(true);
+    setTopicsError("");
+    try {
+      if (type === "file" && !(await flushTopicSave())) return;
+      const name = type === "folder" ? tr("새 폴더", "New folder", "新建文件夹") : tr("새 노트", "New note", "新建笔记");
+      const docRef = await addDoc(collection(db, "topics"), {
+        name,
+        type,
+        parentId: parentId ?? null,
+        content: "",
+        createdBy: auth.currentUser?.email ?? "",
+        updatedAt: serverTimestamp()
+      });
+      if (parentId) {
+        setExpandedFolders((prev) => (prev.includes(parentId) ? prev : [...prev, parentId]));
+        setSelectedFolderId(parentId);
+      }
+      if (type === "file") {
+        loadedTopicIdRef.current = null;
+        selectedTopicIdRef.current = docRef.id;
+        setSelectedTopicId(docRef.id);
+        setTopicContent("");
+        setTopicSaveState("saved");
+        setIsSidebarOpen(false);
+      } else {
+        setExpandedFolders((prev) => (prev.includes(docRef.id) ? prev : [...prev, docRef.id]));
+      }
+    } catch {
+      setTopicsError(tr("새 항목을 만들지 못했어요. 잠시 후 다시 시도해주세요.", "Could not create the item. Try again shortly.", "无法创建项目，请稍后重试。"));
+    } finally {
+      setTopicActionBusy(false);
     }
-    if (type === "file") {
-      setSelectedTopicId(docRef.id);
-      setTopicContent("");
-    } else {
-      setExpandedFolders((prev) => (prev.includes(docRef.id) ? prev : [...prev, docRef.id]));
+  };
+
+  const flushTopicSave = async () => {
+    if (saveTopicTimer.current) {
+      window.clearTimeout(saveTopicTimer.current);
+      saveTopicTimer.current = null;
+    }
+    const pending = pendingTopicSaveRef.current;
+    if (!pending || !firebaseReady || !adminAuthed) return true;
+    pendingTopicSaveRef.current = null;
+    setTopicSaveState("saving");
+    try {
+      await setDoc(
+        doc(db, "topics", pending.id),
+        { content: pending.content, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+      setTopicSaveState(pendingTopicSaveRef.current ? "dirty" : "saved");
+      return true;
+    } catch {
+      if (pendingTopicSaveRef.current) {
+        setTopicSaveState("dirty");
+        if (!saveTopicTimer.current) {
+          saveTopicTimer.current = window.setTimeout(() => void flushTopicSave(), 1200);
+        }
+      } else {
+        pendingTopicSaveRef.current = pending;
+        setTopicSaveState("error");
+      }
+      return false;
     }
   };
 
   const updateTopicContent = (id: string, content: string) => {
     setTopicContent(content);
     if (!firebaseReady || !adminAuthed) return;
+    pendingTopicSaveRef.current = { id, content };
+    setTopicSaveState("dirty");
     if (saveTopicTimer.current) window.clearTimeout(saveTopicTimer.current);
-    saveTopicTimer.current = window.setTimeout(async () => {
-      await setDoc(
-        doc(db, "topics", id),
-        { content, updatedAt: serverTimestamp() },
-        { merge: true }
-      );
-    }, 800);
+    saveTopicTimer.current = window.setTimeout(() => void flushTopicSave(), 650);
   };
-
-  const insertLink = () => {
-    if (!editor) return;
-    const url = window.prompt(tr("링크 URL을 입력하세요", "Enter link URL", "输入链接 URL"));
-    if (!url) return;
-    editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-  };
-
-  const insertImage = () => {
-    if (!editor) return;
-    const url = window.prompt(tr("이미지 URL을 입력하세요", "Enter image URL", "输入图片 URL"));
-    if (!url) return;
-    editor.chain().focus().setImage({ src: url }).run();
-  };
-
-  const toolbarBtnStyle = (active?: boolean) => ({
-    background: active ? "#222" : undefined,
-    color: active ? "#fff" : undefined
-  });
 
   const startRenameTopic = (node: TopicNode) => {
     setEditingTopicId(node.id);
@@ -942,7 +971,11 @@ const App: React.FC = () => {
   };
 
   const openContextMenu = (x: number, y: number, node: TopicNode) => {
-    setContextMenu({ x, y, node });
+    setContextMenu({
+      x: Math.max(8, Math.min(x, window.innerWidth - 196)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 238)),
+      node
+    });
   };
 
   const closeContextMenu = () => {
@@ -952,15 +985,23 @@ const App: React.FC = () => {
   const deleteTopicNode = async (node: TopicNode) => {
     if (!firebaseReady || !adminAuthed) return;
     const batch = writeBatch(db);
+    const deletingIds = new Set<string>();
     const collectIds = (n: TopicNode) => {
+      deletingIds.add(n.id);
       batch.delete(doc(db, "topics", n.id));
       topicNodes.filter((c) => c.parentId === n.id).forEach(collectIds);
     };
     collectIds(node);
     await batch.commit();
-    if (selectedTopicId === node.id) {
+    if (selectedTopicId && deletingIds.has(selectedTopicId)) {
+      if (saveTopicTimer.current) window.clearTimeout(saveTopicTimer.current);
+      saveTopicTimer.current = null;
+      pendingTopicSaveRef.current = null;
+      selectedTopicIdRef.current = null;
+      loadedTopicIdRef.current = null;
       setSelectedTopicId(null);
       setTopicContent("");
+      setTopicSaveState("idle");
     }
   };
 
@@ -985,15 +1026,16 @@ const App: React.FC = () => {
       TableHeader,
       TableCell,
       Placeholder.configure({
-        placeholder: tr("여기에 내용을 작성하세요. Markdown처럼 작성해도 됩니다.", "Write here. Markdown-like syntax is okay.", "在此编写内容，可使用类似 Markdown 的语法。")
+        placeholder: tr("오늘의 마음을 천천히 적어보세요…", "Write what is on your heart today…", "慢慢写下今天的心情吧…")
       }),
       Image
     ],
     content: "",
     editable: true,
     onUpdate: ({ editor }) => {
-      if (selectedTopicId) {
-        updateTopicContent(selectedTopicId, editor.getHTML());
+      const activeTopicId = selectedTopicIdRef.current;
+      if (activeTopicId) {
+        updateTopicContent(activeTopicId, editor.getHTML());
       }
     }
   });
@@ -1002,11 +1044,16 @@ const App: React.FC = () => {
     setExpandedFolders((prev) => (prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]));
   };
 
-  const selectTopic = (node: TopicNode) => {
+  const selectTopic = async (node: TopicNode) => {
     if (node.type !== "file") return;
+    if (!(await flushTopicSave())) return;
+    loadedTopicIdRef.current = null;
+    selectedTopicIdRef.current = node.id;
     setSelectedTopicId(node.id);
     setTopicContent(node.content ?? "");
     setSelectedFolderId(node.parentId ?? null);
+    setTopicSaveState("saved");
+    setIsSidebarOpen(false);
   };
 
   const subscribeMessages = () => {
@@ -1370,15 +1417,39 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!editor) return;
     if (!selectedTopicId) {
+      loadedTopicIdRef.current = null;
+      selectedTopicIdRef.current = null;
       setTopicContent("");
       editor.commands.setContent("");
+      setTopicSaveState("idle");
       return;
     }
+    // Realtime snapshots arrive again after every autosave. Only hydrate when
+    // the selected note changes so an older snapshot never replaces new typing.
+    if (loadedTopicIdRef.current === selectedTopicId) return;
     const node = topicNodes.find((n) => n.id === selectedTopicId);
+    if (!node) return;
     const content = node?.content ?? "";
+    loadedTopicIdRef.current = selectedTopicId;
     setTopicContent(content);
     editor.commands.setContent(content || "", false);
+    setTopicSaveState("saved");
   }, [editor, selectedTopicId, topicNodes]);
+
+  useEffect(() => {
+    if (mode !== "topics") return;
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") void flushTopicSave();
+    };
+    const flushWhenLeaving = () => void flushTopicSave();
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    window.addEventListener("pagehide", flushWhenLeaving);
+    return () => {
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      window.removeEventListener("pagehide", flushWhenLeaving);
+      void flushTopicSave();
+    };
+  }, [mode]);
 
   useEffect(() => {
     localStorage.setItem("belle_lang", lang);
@@ -1523,6 +1594,17 @@ const App: React.FC = () => {
     tag.id = "yt-iframe-api";
     document.body.appendChild(tag);
   }, []);
+
+  const selectedTopic = topicNodes.find((node) => node.id === selectedTopicId) ?? null;
+  const topicSaveLabel = topicSaveState === "dirty"
+    ? tr("저장 대기", "Waiting to save", "等待保存")
+    : topicSaveState === "saving"
+      ? tr("저장 중", "Saving", "保存中")
+      : topicSaveState === "error"
+        ? tr("저장 실패 · 다시 시도", "Save failed · Retry", "保存失败 · 重试")
+        : topicSaveState === "saved"
+          ? tr("저장됨", "Saved", "已保存")
+          : tr("노트를 선택하세요", "Select a note", "请选择笔记");
 
   useEffect(() => {
     let timer: number | null = null;
@@ -1852,7 +1934,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className={`layout-container ${mode === "message" ? "chat-active" : ""} ${mode === "album" ? "album-active" : ""}`}>
+    <div className={`layout-container ${mode === "message" ? "chat-active" : ""} ${mode === "album" ? "album-active" : ""} ${mode === "topics" ? "topics-active" : ""}`}>
       <aside className={`sidebar ${isSidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
           {mode === "topics" ? (
@@ -1873,17 +1955,24 @@ const App: React.FC = () => {
 
         {mode === "topics" ? (
           <>
-            <div className="sidebar-actions">
-              <button className="btn editor-btn" onClick={() => createTopicNode("folder", selectedFolderId ?? null)}>
+            <div className="topic-sidebar-brand">
+              <span><Heart size={17} fill="currentColor" /></span>
+              <div>
+                <small>FOR BELLE · OUR DIARY</small>
+                <strong>{tr("둘이 함께 쓰는 공간", "A space we write together", "一起书写的空间")}</strong>
+              </div>
+            </div>
+            <div className="sidebar-actions topic-sidebar-actions">
+              <button className="btn editor-btn" disabled={topicActionBusy} onClick={() => createTopicNode("folder", selectedFolderId ?? null)}>
                 <FolderPlus size={16} />
                 {tr("새 폴더", "New folder", "新建文件夹")}
               </button>
-              <button className="btn editor-btn" style={{ marginTop: 8 }} onClick={() => createTopicNode("file", selectedFolderId ?? null)}>
+              <button className="btn editor-btn" disabled={topicActionBusy} onClick={() => createTopicNode("file", selectedFolderId ?? null)}>
                 <FilePlus size={16} />
                 {tr("새 노트", "New note", "新建笔记")}
               </button>
             </div>
-            <div style={{ padding: "0 12px 12px", overflowY: "auto" }}>
+            <div className="topic-sidebar-list">
               {topicsLoading ? (
                 <p className="label">{tr("불러오는 중...", "Loading...", "加载中...")}</p>
               ) : topicNodes.length === 0 ? (
@@ -1999,7 +2088,7 @@ const App: React.FC = () => {
       </aside>
 
       {/* Main Content */}
-      <div className={`main-content ${mode === "message" ? "message-mode" : ""} ${mode === "album" ? "album-mode" : ""}`}>
+      <div className={`main-content ${mode === "message" ? "message-mode" : ""} ${mode === "album" ? "album-mode" : ""} ${mode === "topics" ? "topics-mode" : ""}`}>
         <header className="header">
           <button className="menu-btn" onClick={() => setIsSidebarOpen(true)}>
             <Menu size={24} />
@@ -2631,112 +2720,80 @@ const App: React.FC = () => {
           {mode === "topics" && (
             <motion.section
               key="topics"
-              className="panel"
+              className="topics-workspace"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <div className="row space" style={{ marginBottom: 8 }}>
-                <h2 style={{ margin: 0 }}>{tr("오늘의 주제", "Daily Topics", "今日主题")}</h2>
-                <div className="row" style={{ gap: 6 }}>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("bold"))} onClick={() => editor?.chain().focus().toggleBold().run()}>
-                    B
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("italic"))} onClick={() => editor?.chain().focus().toggleItalic().run()}>
-                    I
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("underline"))} onClick={() => editor?.chain().focus().toggleUnderline().run()}>
-                    U
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("strike"))} onClick={() => editor?.chain().focus().toggleStrike().run()}>
-                    S
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("bulletList"))} onClick={() => editor?.chain().focus().toggleBulletList().run()}>
-                    {tr("• 목록", "Bullets", "项目")}
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("orderedList"))} onClick={() => editor?.chain().focus().toggleOrderedList().run()}>
-                    {tr("1. 목록", "Numbered", "编号")}
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("taskList"))} onClick={() => editor?.chain().focus().toggleTaskList().run()}>
-                    {tr("체크", "Tasks", "任务")}
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("blockquote"))} onClick={() => editor?.chain().focus().toggleBlockquote().run()}>
-                    {tr("인용", "Quote", "引用")}
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("codeBlock"))} onClick={() => editor?.chain().focus().toggleCodeBlock().run()}>
-                    {tr("코드", "Code", "代码")}
-                  </button>
-                  <button className="btn small" style={toolbarBtnStyle(editor?.isActive("link"))} onClick={insertLink}>
-                    {tr("링크", "Link", "链接")}
-                  </button>
-                  <button className="btn small" onClick={insertImage}>
-                    {tr("이미지", "Image", "图片")}
-                  </button>
-                  <button className="btn small" onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
-                    {tr("표", "Table", "表格")}
-                  </button>
-                  <select
-                    className="input"
-                    style={{ width: 56, fontSize: 12, padding: "4px 6px" }}
-                    value={String(lineHeight)}
-                    onChange={(e) => updateLineHeight(Number(e.target.value))}
-                  >
-                    {Array.from({ length: 20 }, (_, i) => {
-                      const value = ((i + 1) / 10).toFixed(1);
-                      return (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      );
-                    })}
-                  </select>
+              <header className="topics-topbar">
+                <button className="topics-home-button" onClick={goToHome} aria-label={tr("홈으로", "Back home", "返回主页")}><Home size={19} /></button>
+                <div className="topics-heading">
+                  <span><Heart size={9} fill="currentColor" /> {tr("오늘의 주제 · 함께 쓰는 노트", "DAILY TOPICS · SHARED NOTES", "今日主题 · 共享笔记")}</span>
+                  <h2>{selectedTopic?.name || tr("노트를 선택하세요", "Choose a note", "请选择笔记")}</h2>
                 </div>
-              </div>
+                <button
+                  className={`topic-save-status ${topicSaveState}`}
+                  onClick={() => topicSaveState === "error" && void flushTopicSave()}
+                  disabled={topicSaveState !== "error"}
+                >
+                  <span className="topic-save-icon" aria-hidden="true">
+                    {topicSaveState === "saving" ? <LoaderCircle className="topic-spin" size={15} /> : topicSaveState === "error" ? <CloudOff size={15} /> : topicSaveState === "saved" ? <Heart size={15} fill="currentColor" /> : <Cloud size={15} />}
+                  </span>
+                  <span>{topicSaveLabel}</span>
+                </button>
+                <button className="topics-new-button" disabled={topicActionBusy} onClick={() => void createTopicNode("file", selectedFolderId ?? null)}>
+                  {topicActionBusy ? <LoaderCircle className="topic-spin" size={17} /> : <Plus size={18} />}
+                  <span>{tr("새 노트", "New note", "新建笔记")}</span>
+                </button>
+                <button className="topics-list-button" onClick={() => setIsSidebarOpen(true)} aria-label={tr("노트 목록", "Note list", "笔记列表")}>
+                  <PanelLeftOpen size={20} />
+                </button>
+              </header>
 
-              <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, background: "#fff", minHeight: 360 }}>
+              {topicsError && <div className="topics-error"><AlertCircle size={16} /><span>{topicsError}</span></div>}
+
+              <div className="topic-editor-shell">
                 {selectedTopicId ? (
-                  <div style={{ minHeight: 360 }}>
-                    <div
-                      onClick={() => editor?.chain().focus().run()}
-                      style={{
-                        minHeight: 360,
-                        padding: "8px 4px 12px",
-                        borderRadius: 0,
-                        background: "#fcfbf9",
-                        border: "none",
-                        borderBottom: "1px solid #e6e6e6",
-                        outline: "none"
-                      }}
-                    >
-                      <EditorContent
-                        editor={editor}
-                        style={{
-                          minHeight: 340,
-                          fontFamily: "\"Iowan Old Style\", \"Palatino Linotype\", \"Book Antiqua\", Palatino, serif",
-                          fontSize: 15,
-                          lineHeight
-                        }}
-                      />
+                  <div className="topic-editor-page" onClick={() => editor?.chain().focus().run()}>
+                    <Heart className="topic-page-heart" size={22} fill="currentColor" aria-hidden="true" />
+                    <div className="topic-editor-date">
+                      <Calendar size={13} />
+                      {selectedTopic?.updatedAt
+                        ? new Date(selectedTopic.updatedAt).toLocaleDateString(lang === "en" ? "en-US" : lang === "zh" ? "zh-TW" : "ko-KR", { year: "numeric", month: "long", day: "numeric" })
+                        : tr("새로운 기록", "New entry", "新的记录")}
                     </div>
+                    <p className="topic-writing-note">
+                      <Heart size={10} fill="currentColor" />
+                      {tr("마음 가는 대로, 천천히", "Slowly, in your own words", "跟随心意，慢慢写")}
+                    </p>
+                    <EditorContent
+                      editor={editor}
+                      className="topic-editor-content"
+                    />
                   </div>
                 ) : topicNodes.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "24px 12px" }}>
-                    <p className="label" style={{ marginBottom: 12 }}>
+                  <div className="topic-empty-state">
+                    <span className="topic-empty-icon"><FileText size={28} /><Heart size={11} fill="currentColor" /></span>
+                    <p>
                       {tr("폴더나 노트를 먼저 만들어 주세요.", "Create a folder or note first.", "请先创建文件夹或笔记。")}
                     </p>
-                    <div className="row" style={{ justifyContent: "center", gap: 8 }}>
-                      <button className="btn small" onClick={() => createTopicNode("folder", null)}>
+                    <div>
+                      <button onClick={() => void createTopicNode("folder", null)}>
                         <FolderPlus size={14} />
                         {tr("새 폴더", "New folder", "新建文件夹")}
                       </button>
-                      <button className="btn small" onClick={() => createTopicNode("file", null)}>
+                      <button onClick={() => void createTopicNode("file", null)}>
                         <FilePlus size={14} />
                         {tr("새 노트", "New note", "新建笔记")}
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <p className="label">{tr("왼쪽에서 노트를 선택하세요.", "Select a note on the left.", "请选择左侧的笔记。")}</p>
+                  <button className="topic-choose-note" onClick={() => setIsSidebarOpen(true)}>
+                    <PanelLeftOpen size={28} />
+                    <strong>{tr("노트를 선택하세요", "Choose a note", "请选择笔记")}</strong>
+                    <span>{tr("목록에서 이어 쓸 노트를 골라주세요.", "Pick a note from the list to continue writing.", "请从列表中选择要继续编辑的笔记。")}</span>
+                  </button>
                 )}
               </div>
             </motion.section>
