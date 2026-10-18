@@ -735,6 +735,8 @@ const App: React.FC = () => {
     if (!firebaseReady || !auth.currentUser) return;
     const trimmed = nickname.trim();
     const role = auth.currentUser.email?.toLowerCase() === "belle@kim.com" ? "belle" : "partner";
+    const bridgeId = role === "belle" ? "__garden_belle" : "__garden_partner";
+    const nowMs = Date.now();
     if (trimmed) {
       setCoupleProfiles((prev) => {
         const next = { ...prev, [role]: { ...prev[role], name: trimmed, photoUrl: profilePhotoUrl || prev[role].photoUrl } };
@@ -751,8 +753,22 @@ const App: React.FC = () => {
       ...(trimmed
         ? [
             setDoc(
+              doc(db, "topics", bridgeId),
+              {
+                name: trimmed,
+                photoUrl: profilePhotoUrl || "",
+                role,
+                ownerEmail: auth.currentUser.email || "",
+                createdBy: auth.currentUser.email || "",
+                isSystemState: true,
+                lastActiveMs: nowMs,
+                syncedAtMs: nowMs
+              },
+              { merge: true }
+            ),
+            setDoc(
               doc(db, "couple_characters", role),
-              { name: trimmed, photoUrl: profilePhotoUrl || "", ownerEmail: auth.currentUser.email || "", updatedAt: serverTimestamp() },
+              { name: trimmed, photoUrl: profilePhotoUrl || "", ownerEmail: auth.currentUser.email || "", lastActiveMs: nowMs, updatedAt: serverTimestamp() },
               { merge: true }
             )
           ]
@@ -770,6 +786,8 @@ const App: React.FC = () => {
     }
 
     const role = auth?.currentUser?.email?.toLowerCase() === "belle@kim.com" ? "belle" : "partner";
+    const bridgeId = role === "belle" ? "__garden_belle" : "__garden_partner";
+    const nowMs = Date.now();
     const localChars = loadLocalProfiles();
     localChars[role] = { ...localChars[role], photoUrl: dataUrl };
     localStorage.setItem(CHARACTER_STORAGE_KEY, JSON.stringify(localChars));
@@ -783,8 +801,21 @@ const App: React.FC = () => {
           { merge: true }
         ),
         setDoc(
+          doc(db, "topics", bridgeId),
+          {
+            photoUrl: dataUrl,
+            role,
+            ownerEmail: auth.currentUser.email || "",
+            createdBy: auth.currentUser.email || "",
+            isSystemState: true,
+            lastActiveMs: nowMs,
+            syncedAtMs: nowMs
+          },
+          { merge: true }
+        ),
+        setDoc(
           doc(db, "couple_characters", role),
-          { photoUrl: dataUrl, ownerEmail: auth.currentUser.email || "", updatedAt: serverTimestamp() },
+          { photoUrl: dataUrl, ownerEmail: auth.currentUser.email || "", lastActiveMs: nowMs, updatedAt: serverTimestamp() },
           { merge: true }
         )
       ]);
@@ -900,13 +931,18 @@ const App: React.FC = () => {
     const unsub = onSnapshot(
       q,
       (snapshot) => {
-        snapshot.docs.forEach((docSnap) => {
+        const diaryDocs = snapshot.docs.filter(
+          (docSnap) =>
+            !docSnap.id.startsWith("__garden_") &&
+            !(docSnap.data() as { isSystemState?: boolean }).isSystemState
+        );
+        diaryDocs.forEach((docSnap) => {
           const data = docSnap.data() as { name?: string; defaultKey?: string };
           if (data.defaultKey === "root_folder" && data.name && LEGACY_ROOT_FOLDER_NAMES.includes(data.name)) {
             void setDoc(docSnap.ref, { name: defaultTopicName("root_folder", lang) }, { merge: true }).catch(() => {});
           }
         });
-        const items = snapshot.docs.map((docSnap) => {
+        const items = diaryDocs.map((docSnap) => {
           const data = docSnap.data() as {
             name?: string;
             type?: "folder" | "file";
@@ -1387,32 +1423,47 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!adminAuthed || !firebaseReady || !db) return;
-    const unsubs = (["belle", "partner"] as const).map((role) =>
-      onSnapshot(
-        doc(db, "couple_characters", role),
-        (snap) => {
-          if (!snap.exists()) return;
-          const remote = snap.data() as Partial<CharacterProfile>;
-          setCoupleProfiles((prev) => {
-            const next = {
-              ...prev,
-              [role]: {
-                ...prev[role],
-                ...remote,
-                role,
-                species: role === "partner" ? "dog" : remote.species === "rabbit" ? "rabbit" : "cat"
-              }
-            };
-            localStorage.setItem(CHARACTER_STORAGE_KEY, JSON.stringify(next));
-            if (role === "belle") {
-              setBelleSpecies(next.belle.species === "rabbit" ? "rabbit" : "cat");
-            }
-            return next;
-          });
-        },
-        () => {}
-      )
-    );
+    const applyRemoteRole = (role: "belle" | "partner", remote: Partial<CharacterProfile>) => {
+      setCoupleProfiles((prev) => {
+        const next = {
+          ...prev,
+          [role]: {
+            ...prev[role],
+            ...remote,
+            role,
+            species: role === "partner" ? "dog" : remote.species === "rabbit" ? "rabbit" : "cat"
+          }
+        };
+        localStorage.setItem(CHARACTER_STORAGE_KEY, JSON.stringify(next));
+        if (role === "belle") {
+          setBelleSpecies(next.belle.species === "rabbit" ? "rabbit" : "cat");
+        }
+        return next;
+      });
+    };
+
+    const unsubs: Array<() => void> = [];
+    (["belle", "partner"] as const).forEach((role) => {
+      const bridgeId = role === "belle" ? "__garden_belle" : "__garden_partner";
+      unsubs.push(
+        onSnapshot(
+          doc(db, "topics", bridgeId),
+          (snap) => {
+            if (snap.exists()) applyRemoteRole(role, snap.data() as Partial<CharacterProfile>);
+          },
+          () => {}
+        )
+      );
+      unsubs.push(
+        onSnapshot(
+          doc(db, "couple_characters", role),
+          (snap) => {
+            if (snap.exists()) applyRemoteRole(role, snap.data() as Partial<CharacterProfile>);
+          },
+          () => {}
+        )
+      );
+    });
     return () => unsubs.forEach((u) => u());
   }, [adminAuthed, firebaseReady]);
 

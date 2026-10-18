@@ -1,0 +1,13 @@
+// Optional Firestore rules snippet for couple_characters and character_world.
+// Note: The app already uses a permission-safe bridge in `topics/__garden_*` so
+// real-time sync works immediately without changing Firebase Console rules.
+// If you also want native collection rules in Firebase Console, add this inside:
+// match /databases/{database}/documents { ... }
+
+match /couple_characters/{role} {
+  allow read, write: if isForBelleMember();
+}
+
+match /character_world/{docId} {
+  allow read, write: if isForBelleMember();
+}
