@@ -6,6 +6,7 @@ import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, ge
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { auth, db, isFirebaseConfigured } from "./firebase";
 import CharacterWorld, { CHARACTER_STORAGE_KEY, CharacterProfile, loadLocalProfiles } from "./CharacterWorld";
+import DailyDiary from "./DailyDiary";
 import { compressAvatarDataUrl } from "./albumImage";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -934,6 +935,7 @@ const App: React.FC = () => {
         const diaryDocs = snapshot.docs.filter(
           (docSnap) =>
             !docSnap.id.startsWith("__garden_") &&
+            !docSnap.id.startsWith("__diary_") &&
             !(docSnap.data() as { isSystemState?: boolean }).isSystemState
         );
         diaryDocs.forEach((docSnap) => {
@@ -2086,81 +2088,16 @@ const App: React.FC = () => {
     <div className={`layout-container ${mode === "message" ? "chat-active" : ""} ${mode === "album" ? "album-active" : ""} ${mode === "topics" ? "topics-active" : ""}`}>
       <aside className={`sidebar ${isSidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
-          {mode === "topics" ? (
-            <button className="home-btn" onClick={goToHome}>
-              <ChevronRight size={18} />
-              {tr("뒤로가기", "Back", "返回")}
-            </button>
-          ) : (
-            <button className="home-btn" onClick={goToHome}>
-              <Home size={18} />
-              {tr("홈", "Home", "主页")}
-            </button>
-          )}
+          <button className="home-btn" onClick={goToHome}>
+            <Home size={18} />
+            {tr("홈", "Home", "主页")}
+          </button>
           <button className="close-btn" onClick={() => setIsSidebarOpen(false)}>
             <X size={24} />
           </button>
         </div>
 
-        {mode === "topics" ? (
-          <>
-            <div className="topic-sidebar-brand">
-              <span><Heart size={17} fill="currentColor" /></span>
-              <div>
-                <small>FOR BELLE · OUR DIARY</small>
-                <strong>{tr("둘이 함께 쓰는 공간", "A space we write together", "一起书写的空间")}</strong>
-              </div>
-            </div>
-            <div className="sidebar-actions topic-sidebar-actions">
-              <button className="btn editor-btn" disabled={topicActionBusy} onClick={() => createTopicNode("folder", selectedFolderId ?? null)}>
-                <FolderPlus size={16} />
-                {tr("새 폴더", "New folder", "新建文件夹")}
-              </button>
-              <button className="btn editor-btn" disabled={topicActionBusy} onClick={() => createTopicNode("file", selectedFolderId ?? null)}>
-                <FilePlus size={16} />
-                {tr("새 노트", "New note", "新建笔记")}
-              </button>
-            </div>
-            <div className="topic-sidebar-list">
-              {topicsLoading ? (
-                <p className="label">{tr("불러오는 중...", "Loading...", "加载中...")}</p>
-              ) : topicNodes.length === 0 ? (
-                <p className="label">{tr("폴더나 노트를 만들어 주세요.", "Create a folder or note.", "请创建文件夹或笔记。")}</p>
-              ) : (
-                <ul className="song-list" style={{ marginTop: 0 }}>
-                  {topicNodes
-                        .filter((n) => n.parentId == null)
-                        .map((node) => (
-                          <TopicTreeNode
-                            key={node.id}
-                            node={node}
-                            nodes={topicNodes}
-                            expandedFolders={expandedFolders}
-                            toggleFolder={toggleFolder}
-                            selectTopic={selectTopic}
-                            selectedId={selectedTopicId}
-                            selectedFolderId={selectedFolderId}
-                            onSelectFolder={setSelectedFolderId}
-                            createTopicNode={createTopicNode}
-                            onRename={startRenameTopic}
-                            onDelete={deleteTopicNode}
-                            onMove={moveTopicNode}
-                            editingId={editingTopicId}
-                            editingName={editingTopicName}
-                            setEditingName={setEditingTopicName}
-                            onSaveRename={saveRenameTopic}
-                            onCancelRename={cancelRename}
-                            tr={tr}
-                            depth={0}
-                            onOpenContextMenu={openContextMenu}
-                          />
-                        ))}
-                </ul>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
+        <>
             <div className="sidebar-actions">
               <button className="btn editor-btn" onClick={goToEditor}>
                 <Edit3 size={16} />
@@ -2232,8 +2169,7 @@ const App: React.FC = () => {
                 {tr("설정", "Settings", "设置")}
               </button>
             </div>
-          </>
-        )}
+        </>
       </aside>
 
       {/* Main Content */}
@@ -2969,85 +2905,7 @@ const App: React.FC = () => {
           )}
 
           {mode === "topics" && (
-            <motion.section
-              key="topics"
-              className="topics-workspace"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <header className="topics-topbar">
-                <button className="topics-home-button" onClick={goToHome} aria-label={tr("홈으로", "Back home", "返回主页")}><Home size={19} /></button>
-                <div className="topics-heading">
-                  <span><Heart size={9} fill="currentColor" /> {tr("둘만의 다이어리 · 함께 쓰는 노트", "OUR DIARY · SHARED NOTES", "我们俩的日记 · 共享笔记")}</span>
-                  <h2>{selectedTopic?.name || tr("노트를 선택하세요", "Choose a note", "请选择笔记")}</h2>
-                </div>
-                <button
-                  className={`topic-save-status ${topicSaveState}`}
-                  onClick={() => topicSaveState === "error" && void flushTopicSave()}
-                  disabled={topicSaveState !== "error"}
-                >
-                  <span className="topic-save-icon" aria-hidden="true">
-                    {topicSaveState === "saving" ? <LoaderCircle className="topic-spin" size={15} /> : topicSaveState === "error" ? <CloudOff size={15} /> : topicSaveState === "saved" ? <Heart size={15} fill="currentColor" /> : <Cloud size={15} />}
-                  </span>
-                  <span>{topicSaveLabel}</span>
-                </button>
-                <button className="topics-new-button" disabled={topicActionBusy} onClick={() => void createTopicNode("file", selectedFolderId ?? null)}>
-                  {topicActionBusy ? <LoaderCircle className="topic-spin" size={17} /> : <Plus size={18} />}
-                  <span>{tr("새 노트", "New note", "新建笔记")}</span>
-                </button>
-                <button className="topics-list-button" onClick={() => setIsSidebarOpen(true)} aria-label={tr("노트 목록", "Note list", "笔记列表")}>
-                  <PanelLeftOpen size={20} />
-                </button>
-              </header>
-
-              {topicsError && <div className="topics-error"><AlertCircle size={16} /><span>{topicsError}</span></div>}
-
-              <div className="topic-editor-shell">
-                {selectedTopicId ? (
-                  <div className="topic-editor-page" onClick={() => editor?.chain().focus().run()}>
-                    <Heart className="topic-page-heart" size={22} fill="currentColor" aria-hidden="true" />
-                    <div className="topic-editor-date">
-                      <Calendar size={13} />
-                      {selectedTopic?.updatedAt
-                        ? new Date(selectedTopic.updatedAt).toLocaleDateString(lang === "en" ? "en-US" : lang === "zh" ? "zh-TW" : "ko-KR", { year: "numeric", month: "long", day: "numeric" })
-                        : tr("새로운 기록", "New entry", "新的记录")}
-                    </div>
-                    <p className="topic-writing-note">
-                      <Heart size={10} fill="currentColor" />
-                      {tr("마음 가는 대로, 천천히", "Slowly, in your own words", "跟随心意，慢慢写")}
-                    </p>
-                    <EditorContent
-                      editor={editor}
-                      className="topic-editor-content"
-                    />
-                  </div>
-                ) : topicNodes.length === 0 ? (
-                  <div className="topic-empty-state">
-                    <span className="topic-empty-icon"><FileText size={28} /><Heart size={11} fill="currentColor" /></span>
-                    <p>
-                      {tr("폴더나 노트를 먼저 만들어 주세요.", "Create a folder or note first.", "请先创建文件夹或笔记。")}
-                    </p>
-                    <div>
-                      <button onClick={() => void createTopicNode("folder", null)}>
-                        <FolderPlus size={14} />
-                        {tr("새 폴더", "New folder", "新建文件夹")}
-                      </button>
-                      <button onClick={() => void createTopicNode("file", null)}>
-                        <FilePlus size={14} />
-                        {tr("새 노트", "New note", "新建笔记")}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button className="topic-choose-note" onClick={() => setIsSidebarOpen(true)}>
-                    <PanelLeftOpen size={28} />
-                    <strong>{tr("노트를 선택하세요", "Choose a note", "请选择笔记")}</strong>
-                    <span>{tr("목록에서 이어 쓸 노트를 골라주세요.", "Pick a note from the list to continue writing.", "请从列表中选择要继续编辑的笔记。")}</span>
-                  </button>
-                )}
-              </div>
-            </motion.section>
+            <DailyDiary key="topics" lang={lang} onBack={goToHome} />
           )}
 
           {mode === "editor" && (

@@ -4,23 +4,24 @@ import {
   Cake,
   Camera,
   Check,
+  Compass,
   DoorOpen,
   Flower2,
   Gift,
   Heart,
   Home,
   LoaderCircle,
+  MapPin,
   MessageCircleHeart,
   Moon,
+  Music,
   Navigation,
   Pencil,
-  Rabbit,
   RotateCcw,
   Send,
   Sparkles,
   Sun,
   Sunset,
-  Trash2,
   Trees,
   X
 } from "lucide-react";
@@ -32,21 +33,41 @@ type Lang = "ko" | "en" | "zh";
 type Role = "belle" | "partner";
 type BelleSpecies = "cat" | "rabbit";
 type PetMood = "idle" | "walk" | "run" | "jump" | "love" | "sleep" | "happy" | "snack";
-type TimeThemeMode = "auto" | "day" | "sunset" | "night";
+type TimeThemeMode = "day" | "sunset" | "night";
 type TimeOfDay = "day" | "sunset" | "night";
-export type WorldMapId = "garden" | "belle_house" | "partner_house";
-type CoopActionType = "hug" | "feed" | "flower" | "jump" | "nap" | "pet";
+
+export type WorldMapId =
+  | "flower_forest"
+  | "garden"
+  | "starlight_pond"
+  | "belle_house"
+  | "partner_house";
+
+type CoopActionType =
+  | "pet"
+  | "hug"
+  | "kiss"
+  | "feed"
+  | "flower"
+  | "dance"
+  | "jump"
+  | "highfive"
+  | "photo"
+  | "nap";
 
 export type InteractiveSpotId =
   | "wish_mailbox"
   | "couple_tree"
+  | "flower_picnic"
   | "garden_bench"
   | "campfire"
   | "sparkle_pond"
   | "star_observatory"
+  | "forest_swing"
   | "tea_table"
   | "cozy_rug"
-  | "bed";
+  | "bed"
+  | "jukebox";
 
 export type WorldEnvironmentProps = {
   campfireLit?: boolean;
@@ -54,6 +75,11 @@ export type WorldEnvironmentProps = {
   lastWateredBy?: Role;
   petalShowerAtMs?: number;
   meteorShowerAtMs?: number;
+  jukeboxPlaying?: boolean;
+  affectionExp?: number;
+  interactionCount?: number;
+  lastInteractionText?: string;
+  lastInteractionAtMs?: number;
 };
 
 export type CharacterProfile = {
@@ -63,7 +89,7 @@ export type CharacterProfile = {
   message: string;
   species: BelleSpecies | "dog";
   photoUrl?: string;
-  // Real-time multiplayer fields synced in couple_characters/{role} & topics/__garden_{role}
+  // Real-time multiplayer & persistent state fields
   x?: number;
   y?: number;
   direction?: 1 | -1;
@@ -120,7 +146,16 @@ type CoopEventPayload = {
   mapId: WorldMapId;
   centerX: number;
   centerY: number;
+  affectionGain?: number;
   createdAtMs: number;
+};
+
+type ContextMenuState = {
+  targetType: "me" | "partner" | "ground";
+  clientX: number;
+  clientY: number;
+  stageX: number;
+  stageY: number;
 };
 
 type CharacterWorldProps = {
@@ -135,6 +170,8 @@ export const CHARACTER_STORAGE_KEY = "forbelle_character_profiles_v1";
 const GARDEN_GIFT_STORAGE_KEY = "forbelle_garden_gift_v1";
 const GARDEN_DECORS_STORAGE_KEY = "forbelle_garden_decors_v2";
 const GARDEN_WORLD_PROPS_STORAGE_KEY = "forbelle_garden_world_props_v1";
+const GARDEN_TIME_THEME_KEY = "forbelle_garden_time_theme_v1";
+
 const characterAsset = (fileName: string) => `${import.meta.env.BASE_URL}characters/${fileName}`;
 
 const ALL_PRELOAD_ASSETS = [
@@ -162,9 +199,8 @@ const ALL_PRELOAD_ASSETS = [
 ];
 
 const DEFAULT_DECORS: PlacedDecoration[] = [
-  { id: "default-bed-left", type: "flower_pink", mapId: "garden", x: 14, y: 74, placedBy: "belle" },
-  { id: "default-bed-right", type: "flower_lavender", mapId: "garden", x: 88, y: 66, placedBy: "partner" },
-  { id: "default-bed-top", type: "flower_sun", mapId: "garden", x: 38, y: 58, placedBy: "belle" }
+  { id: "default-bed-left", type: "flower_pink", mapId: "garden", x: 24, y: 74, placedBy: "belle" },
+  { id: "default-bed-right", type: "flower_lavender", mapId: "garden", x: 76, y: 72, placedBy: "partner" }
 ];
 
 const DECOR_CATALOG: Array<{
@@ -196,32 +232,13 @@ const DECOR_CATALOG: Array<{
     sprite: "garden-bench-prop.webp",
     emoji: "🪑",
     label: { ko: "정원 나무 벤치", en: "Garden Bench", zh: "花园木长椅" }
-  },
-  {
-    type: "picnic_basket",
-    emoji: "🧺",
-    label: { ko: "피크닉 바구니", en: "Picnic Basket", zh: "野餐篮" }
-  },
-  {
-    type: "tea_table",
-    emoji: "🫖",
-    label: { ko: "티타임 다과상", en: "Tea Set", zh: "下午茶桌" }
-  },
-  {
-    type: "plush_cushion",
-    emoji: "🧸",
-    label: { ko: "폭신 인형 쿠션", en: "Plush Cushion", zh: "抱枕玩偶" }
-  },
-  {
-    type: "fairy_lantern",
-    emoji: "🏮",
-    label: { ko: "요정 무드 랜턴", en: "Fairy Lantern", zh: "精灵小灯笼" }
-  },
-  {
-    type: "potted_plant",
-    emoji: "🪴",
-    label: { ko: "초록 화분", en: "Potted Plant", zh: "绿植盆栽" }
   }
+];
+
+const VALID_MAPS: WorldMapId[] = [
+  "garden",
+  "belle_house",
+  "partner_house"
 ];
 
 const defaults: Record<Role, CharacterProfile> = {
@@ -232,11 +249,13 @@ const defaults: Record<Role, CharacterProfile> = {
     message: "오늘도 같이 놀자 ♡",
     species: "cat",
     photoUrl: "",
-    x: 42,
+    x: 40,
     y: 66,
     direction: 1,
     currentMap: "garden",
-    activeSpotId: null
+    liveMood: "idle",
+    activeSpotId: null,
+    lastActiveMs: 0
   },
   partner: {
     role: "partner",
@@ -245,11 +264,13 @@ const defaults: Record<Role, CharacterProfile> = {
     message: "Belle 곁을 지키는 중",
     species: "dog",
     photoUrl: "",
-    x: 58,
-    y: 68,
+    x: 60,
+    y: 66,
     direction: -1,
     currentMap: "garden",
-    activeSpotId: null
+    liveMood: "idle",
+    activeSpotId: null,
+    lastActiveMs: 0
   }
 };
 
@@ -260,11 +281,79 @@ const GIFT_ICONS: Record<GardenGiftNote["icon"], string> = {
   flower: "🌷"
 };
 
+const LEVEL_TIERS = [
+  { level: 1, minExp: 0, nextExp: 100, ko: "설레는 첫걸음", en: "Sweet Beginning", zh: "心动初遇", badge: "🌱" },
+  { level: 2, minExp: 100, nextExp: 250, ko: "다정한 산책 단짝", en: "Stroll Buddies", zh: "散步伙伴", badge: "🌷" },
+  { level: 3, minExp: 250, nextExp: 500, ko: "달콤한 짝꿍", en: "Sweetheart Duo", zh: "甜蜜搭档", badge: "🍓" },
+  { level: 4, minExp: 500, nextExp: 900, ko: "꿀떨어지는 커플", en: "Honey Couple", zh: "蜜意情侣", badge: "💞" },
+  { level: 5, minExp: 900, nextExp: 1500, ko: "별빛 소울메이트", en: "Starlight Soulmates", zh: "星光伴侣", badge: "🌟" },
+  { level: 6, minExp: 1500, nextExp: 2300, ko: "영원한 사랑꾼", en: "Eternal Lovers", zh: "永恒恋人", badge: "👑" }
+];
+
+export function getCoupleLevelInfo(rawExp = 0, lang: Lang = "ko") {
+  const exp = Math.max(0, Math.round(rawExp));
+  for (let i = LEVEL_TIERS.length - 1; i >= 0; i--) {
+    const tier = LEVEL_TIERS[i];
+    if (exp >= tier.minExp) {
+      if (i === LEVEL_TIERS.length - 1 && exp >= tier.nextExp) {
+        const extraLevels = Math.floor((exp - tier.minExp) / 800);
+        const curMin = tier.minExp + extraLevels * 800;
+        const curNext = curMin + 800;
+        const pct = Math.min(100, Math.round(((exp - curMin) / 800) * 100));
+        return {
+          level: tier.level + extraLevels,
+          title: lang === "en" ? tier.en : lang === "zh" ? tier.zh : tier.ko,
+          badge: tier.badge,
+          exp,
+          curMin,
+          curNext,
+          pct
+        };
+      }
+      const span = Math.max(1, tier.nextExp - tier.minExp);
+      const pct = Math.min(100, Math.round(((exp - tier.minExp) / span) * 100));
+      return {
+        level: tier.level,
+        title: lang === "en" ? tier.en : lang === "zh" ? tier.zh : tier.ko,
+        badge: tier.badge,
+        exp,
+        curMin: tier.minExp,
+        curNext: tier.nextExp,
+        pct
+      };
+    }
+  }
+  return {
+    level: 1,
+    title: lang === "en" ? LEVEL_TIERS[0].en : lang === "zh" ? LEVEL_TIERS[0].zh : LEVEL_TIERS[0].ko,
+    badge: "🌱",
+    exp: 0,
+    curMin: 0,
+    curNext: 100,
+    pct: 0
+  };
+}
+
+const SPOT_RESTING_MOOD: Partial<Record<InteractiveSpotId, PetMood>> = {
+  garden_bench: "happy",
+  campfire: "snack",
+  couple_tree: "love",
+  flower_picnic: "snack",
+  sparkle_pond: "happy",
+  star_observatory: "love",
+  forest_swing: "happy",
+  tea_table: "snack",
+  cozy_rug: "love",
+  bed: "sleep",
+  jukebox: "happy",
+  wish_mailbox: "happy"
+};
+
 const copy = {
   ko: {
-    eyebrow: "OUR 2.5D PANORAMA GARDEN & WIDE HOUSES",
+    eyebrow: "OUR COZY 2.5D COUPLE WORLD",
     title: "둘만의 정원",
-    subtitle: "넓어진 파노라마 정원과 아늑한 집을 오가며 벤치·모닥불·사랑나무·연못에서 실시간으로 교감해요.",
+    subtitle: "길목과 문을 지나 5개 공간을 여행하고, 캐릭터나 바닥을 우클릭(모바일 꾹 누르기)해 다정하게 교감해요.",
     back: "홈으로",
     edit: "내 캐릭터·프로필 설정",
     saved: "저장했어요",
@@ -283,87 +372,97 @@ const copy = {
     photoRemove: "사진 삭제",
     photoUploading: "사진 처리 중...",
     photoError: "사진을 불러오지 못했어요. 다른 이미지로 시도해 주세요.",
-    local: "이 기기에 안전하게 저장 중",
-    synced: "실시간 동기화 연결됨",
-    syncWait: "Firebase 연결 시 실시간 동기화",
+    local: "이 기기에 저장됨",
+    synced: "실시간 동기화 중",
+    syncWait: "연결 대기 중",
     birthdayToday: "오늘은 생일!",
     leaveGift: "선물·쪽지 놓기",
     emptyBirthday: "생일을 등록해 주세요",
-    tapHintGarden: "바닥을 탭해 걷거나 좌우로 밀어 정원을 둘러보세요 · 벤치·모닥불·사랑나무·연못 터치!",
-    tapHintHouse: "넓어진 방 안을 산책하거나 다과상·폭신 러그·침대를 탭해 쉬어보세요",
+    tapHintDefault: "바닥 탭: 이동 · 캐릭터/바닥 우클릭(모바일 꾹 누르기): 교감 & 메뉴 열기",
     tapHintDecor: "꾸미기 모드: 원하는 바닥 위치를 탭하면 소품이 배치돼요 (소품 탭 시 삭제)",
-    timeAuto: "자동 시간",
-    timeDay: "낮",
-    timeSunset: "노을",
-    timeNight: "밤",
-    mapGarden: "둘만의 정원",
+    timeDay: "밝은 낮",
+    timeSunset: "노을빛",
+    timeNight: "별밤",
+    mapFlowerForest: "사랑나무 꽃숲",
+    mapGarden: "중앙 정원 광장",
+    mapStarlightPond: "반딧불 연못",
     mapBelleHouse: "Belle의 집",
     mapPartnerHouse: "강아지 집",
+    shortForest: "🌸 꽃숲",
+    shortGarden: "🌳 중앙정원",
+    shortPond: "⛲ 연못",
+    shortBelleHouse: "🏡 벨의집",
+    shortPartnerHouse: "🏡 강아지집",
     enterBelleHouse: "Belle의 집 들어가기",
     enterPartnerHouse: "강아지 집 들어가기",
-    exitToGarden: "정원으로 나가기",
-    controllingLabel: "내가 조종 중",
+    exitToGarden: "중앙 정원으로 나가기",
     onlyMyCharacterNotice: "내 캐릭터만 직접 조종·수정할 수 있어요 ♡",
     partnerOnline: "실시간 접속 중",
     partnerOffline: "쉬는 중",
-    followPartner: "따라가기 →",
-    sameMapNear: "둘이 가까이 만났어요! 실시간으로 교감해 보세요",
-    sameMapFar: "같은 공간에 있어요! 가까이 다가가 교감해 보세요",
-    differentMapInfo: "님은 지금 다른 공간에 있어요",
-    approachPartnerBtn: "옆으로 달려가기",
+    followPartner: "따라가기",
+    approachPartnerBtn: "옆으로 가기",
+    coopPet: "쓰다듬기",
     coopHug: "포옹·코맞대기",
+    coopKiss: "하트 뽀뽀 날리기",
     coopFeed: "딸기 먹여주기",
     coopFlower: "꽃 선물하기",
+    coopDance: "같이 신나게 춤추기",
     coopJump: "같이 폴짝 점프",
+    coopHighfive: "하이파이브",
+    coopPhoto: "커플 기념 찰칵",
     coopNap: "나란히 낮잠",
-    decorateBtn: "정원·집 꾸미기",
+    decorateBtn: "정원·방 꾸미기",
     decorateDone: "꾸미기 완료",
     decorateReset: "기본 배치로",
-    speechPlaceholder: "내 캐릭터 머리 위에 띄울 말풍선 입력...",
-    speechSend: "말하기",
-    quickChips: ["♡", "보고싶어!", "벤치에 앉자 🪑", "모닥불 켜자 🔥", "우리 집 놀러와 🏡"],
+    speechPlaceholder: "말풍선 입력 (예: 이리 와~ ♡)",
+    speechSend: "띄우기",
+    quickChips: ["♡", "보고싶어!", "이리 와~ 🐾", "사랑해 💞", "우리 집 가자 🏡"],
     pettedReaction: "쓰담쓰담 좋아요 ♡",
-    hugReaction: "꼭 안아줬어요 ♡",
-    snackReaction: "아~ 딸기 맛있어! 🍓",
+    hugReaction: "꼭 안아줬어요 💞",
+    kissReaction: "쪽! 하트 뽀뽀 받으세요 💋💘",
+    snackReaction: "아~ 딸기 달콤해! 🍓",
     flowerReaction: "향기로운 꽃 선물 🌷",
+    danceReaction: "랄랄라 같이 춤춰요 🎶💃",
     jumpReaction: "신난다 폴짝! ✨",
+    highfiveReaction: "짝! 완벽한 하이파이브 🙌✨",
+    photoReaction: "하나 둘 셋 치즈~ 찰칵! 📸💖",
     napReaction: "새근새근... Zzz",
     bedReaction: "폭신폭신 침대 최고야 Zzz",
     tableReaction: "달콤한 티타임 🍓♪",
     rugReaction: "우리 집 폭신 러그가 제일 아늑해 🧶♡",
+    jukeboxReaction: "로맨틱한 멜로디가 흘러나와요 📻🎵",
+    jukeboxCoopReaction: "둘이 함께 음악을 들으며 흔들흔들 🎶💞",
     benchReaction: "벤치에 앉으니 살랑살랑 바람이 좋아 🍃",
     benchCoopReaction: "둘이 나란히 벤치에 앉으니까 너무 행복해 💞",
     campfireOnReaction: "모닥불을 피웠어요! 포근하고 따뜻해 🔥🍓",
-    campfireOffReaction: "모닥불 위에서 도란도란 이야기해요 🧺",
+    campfireOffReaction: "모닥불 앞에서 도란도란 이야기해요 🧺",
     campfireCoopReaction: "둘이 모닥불 앞에 앉아 달콤한 불멍 타임 🔥💛",
     treeWaterReaction: "사랑나무야 쑥쑥 자라라! 💧🌸",
     treeCoopReaction: "둘이 함께 가꾼 사랑나무에서 꽃비가 내려요 🌸💞",
+    picnicReaction: "꽃밭 피크닉 매트에서 도시락 냠냠 🧺🍓",
+    picnicCoopReaction: "둘이 오붓하게 꽃밭 피크닉 데이트 🧺💞",
     pondReaction: "첨벙첨벙! 연못 물장구 시원해 🐠🫧",
     pondCoopReaction: "연못 위로 반딧불이와 수련이 피어올라요 ✨🪷",
+    swingReaction: "살랑살랑 통나무 그네 타기 🎶🌿",
+    swingCoopReaction: "둘이 나란히 그네 타며 콧노래 흥얼흥얼 🎶💞",
     mailboxReaction: "우체통에 설레는 마음을 담아요 📮💌",
     starReaction: "별자리 망원경 너머로 별똥별이 떨어져요 🌠",
     starCoopReaction: "둘이 함께 본 밤하늘에 별똥별 쇼가 펼쳐져요 🌠💞",
     bedCoopReaction: "나란히 누워서 꿀잠 자요 Zzz 💞🌙",
     tableCoopReaction: "마주 앉아 달콤한 커플 티파티 🫖🍓💞",
     rugCoopReaction: "거실 러그에 나란히 앉아 꽁냥꽁냥 🧶💞",
-    zoneGardenLeft: "🌸 벨의 꽃숲",
-    zoneGardenCenter: "🌳 중앙 광장",
-    zoneGardenRight: "⛲ 반딧불 연못",
-    zoneHouseLeft: "🫖 다과 코너",
-    zoneHouseCenter: "🧶 거실 라운지",
-    zoneHouseRight: "🛏️ 침실 스위트",
-    cameraFollowMine: "🎯 내 캐릭터 시점",
-    cameraLookPartner: "🔭 상대방 보기",
-    cameraFreePan: "🖐️ 자유 시점 (내 위치로)",
     spotMailboxLabel: "소원 우체통",
     spotTreeLabel: "사랑나무",
+    spotPicnicLabel: "꽃밭 피크닉",
     spotBenchLabel: "가로등 벤치",
     spotCampfireLabel: "별빛 모닥불",
     spotPondLabel: "반딧불 연못",
-    spotStarLabel: "별자리 언덕",
+    spotStarLabel: "별자리 전망대",
+    spotSwingLabel: "통나무 그네",
     spotTableLabel: "다과 테이블",
     spotRugLabel: "폭신 거실 러그",
     spotBedLabel: "침실 침대",
+    spotJukeboxLabel: "감성 주크박스",
     giftModalTitle: "이 자리에 작은 선물·쪽지 놓기",
     giftModalDesc: "지금 내 캐릭터가 서 있는 자리에 작은 선물을 놓아두면 상대가 발견할 수 있어요.",
     giftIconLabel: "아이콘 선택",
@@ -372,13 +471,20 @@ const copy = {
     giftPlaceBtn: "여기에 놓아두기",
     giftFrom: "님이 남긴 선물",
     giftRemove: "선물 거두기",
-    editProfileBtn: "내 프로필 수정",
-    myCharacterBadge: "MY"
+    editProfileBtn: "내 프로필·사진 설정",
+    myCharacterBadge: "나",
+    menuTitleMe: "내 캐릭터 메뉴",
+    menuTitlePartner: "상대 캐릭터와 교감",
+    menuTitleGround: "정원·공간 메뉴",
+    walkHereBtn: "여기로 걸어가기",
+    openActionMenuBtn: "교감·메뉴",
+    affectionTitle: "우리 커플 애정도 & 레벨",
+    affectionDesc: "쓰다듬기, 포옹, 뽀뽀, 함께 앉기, 사랑나무 물주기로 애정도가 올라가요!"
   },
   en: {
-    eyebrow: "OUR 2.5D PANORAMA GARDEN & WIDE HOUSES",
+    eyebrow: "OUR COZY 2.5D COUPLE WORLD",
     title: "Our Garden",
-    subtitle: "Stroll across the wide panoramic garden and spacious cozy houses, interacting at the bench, campfire, love tree, and pond.",
+    subtitle: "Travel across 5 connected spaces and right-click (or long-press on mobile) to interact.",
     back: "Home",
     edit: "Edit my character & profile",
     saved: "Saved",
@@ -397,54 +503,66 @@ const copy = {
     photoRemove: "Remove",
     photoUploading: "Processing...",
     photoError: "Could not load this image. Please try another photo.",
-    local: "Saved safely on this device",
+    local: "Saved on device",
     synced: "Live sync connected",
-    syncWait: "Connects live via Firebase",
+    syncWait: "Connecting...",
     birthdayToday: "Birthday today!",
     leaveGift: "Leave gift note",
     emptyBirthday: "Add a birthday",
-    tapHintGarden: "Tap to walk or drag left/right to pan · Tap the bench, campfire, love tree, or pond!",
-    tapHintHouse: "Stroll around the wide room or tap the tea table, cozy rug, or bed to relax",
-    tapHintDecor: "Decorate mode: Tap the ground to place the selected item (tap an item to remove)",
-    timeAuto: "Auto",
-    timeDay: "Day",
+    tapHintDefault: "Tap ground: Walk · Right-click (or Long-press): Couple Actions & Menu",
+    tapHintDecor: "Decorate mode: Tap the ground to place item (tap item to remove)",
+    timeDay: "Bright Day",
     timeSunset: "Sunset",
-    timeNight: "Night",
-    mapGarden: "Our Garden",
+    timeNight: "Starry Night",
+    mapFlowerForest: "Love Tree Grove",
+    mapGarden: "Center Garden Plaza",
+    mapStarlightPond: "Firefly Pond",
     mapBelleHouse: "Belle's House",
     mapPartnerHouse: "Puppy's House",
+    shortForest: "🌸 Grove",
+    shortGarden: "🌳 Plaza",
+    shortPond: "⛲ Pond",
+    shortBelleHouse: "🏡 Belle's",
+    shortPartnerHouse: "🏡 Puppy's",
     enterBelleHouse: "Enter Belle's House",
     enterPartnerHouse: "Enter Puppy's House",
-    exitToGarden: "Back to Garden",
-    controllingLabel: "Controlling",
+    exitToGarden: "Back to Plaza",
     onlyMyCharacterNotice: "You can only control and edit your own character ♡",
     partnerOnline: "Online now",
     partnerOffline: "Resting",
-    followPartner: "Follow →",
-    sameMapNear: "You met up close! Try a live interaction together",
-    sameMapFar: "You're in the same space! Run closer to interact",
-    differentMapInfo: "is currently in another space",
-    approachPartnerBtn: "Run next to partner",
+    followPartner: "Follow",
+    approachPartnerBtn: "Go next to",
+    coopPet: "Pet Gently",
     coopHug: "Hug & Nuzzle",
+    coopKiss: "Blow a Kiss",
     coopFeed: "Feed Strawberry",
     coopFlower: "Give Flower",
+    coopDance: "Dance Together",
     coopJump: "Jump Together",
+    coopHighfive: "High-Five",
+    coopPhoto: "Take Couple Photo",
     coopNap: "Cozy Nap",
-    decorateBtn: "Decorate",
+    decorateBtn: "Decorate Space",
     decorateDone: "Done Decorating",
     decorateReset: "Reset Default",
-    speechPlaceholder: "Pop a live speech bubble over your character...",
+    speechPlaceholder: "Say something overhead...",
     speechSend: "Say",
-    quickChips: ["♡", "Miss you!", "Sit on the bench 🪑", "By the campfire 🔥", "Visit my house 🏡"],
+    quickChips: ["♡", "Miss you!", "Come here~ 🐾", "Love you 💞", "Visit my house 🏡"],
     pettedReaction: "Love being petted ♡",
-    hugReaction: "Warmest hug ♡",
+    hugReaction: "Warmest hug 💞",
+    kissReaction: "Muah! Flying kiss for you 💋💘",
     snackReaction: "Yum yum strawberry! 🍓",
     flowerReaction: "A sweet flower for you 🌷",
+    danceReaction: "Dancing happily together 🎶💃",
     jumpReaction: "Yay hop hop! ✨",
+    highfiveReaction: "High-five! 🙌✨",
+    photoReaction: "One, two, three, cheese! 📸💖",
     napReaction: "Sweet dreams... Zzz",
     bedReaction: "Cozy bed nap Zzz",
     tableReaction: "Sweet tea time 🍓♪",
     rugReaction: "So soft and cozy on the rug 🧶♡",
+    jukeboxReaction: "Sweet melody playing 📻🎵",
+    jukeboxCoopReaction: "Listening to our favorite song together 🎶💞",
     benchReaction: "Breezy and peaceful on the bench 🍃",
     benchCoopReaction: "Sitting side by side on our bench 💞",
     campfireOnReaction: "Lit the warm campfire! 🔥🍓",
@@ -452,32 +570,30 @@ const copy = {
     campfireCoopReaction: "Warm campfire night together 🔥💛",
     treeWaterReaction: "Grow tall, our love tree! 💧🌸",
     treeCoopReaction: "Pink blossom shower from our love tree 🌸💞",
+    picnicReaction: "Sweet picnic in the flower meadow 🧺🍓",
+    picnicCoopReaction: "Lovely flower picnic date for two 🧺💞",
     pondReaction: "Splash splash by the lotus pond! 🐠🫧",
     pondCoopReaction: "Fireflies glowing over the pond ✨🪷",
+    swingReaction: "Swaying gently on the forest swing 🎶🌿",
+    swingCoopReaction: "Swinging side by side under the trees 🎶💞",
     mailboxReaction: "Checking our wish mailbox 📮💌",
-    starReaction: "A shooting star across the night sky! 🌠",
+    starReaction: "A shooting star across the sky! 🌠",
     starCoopReaction: "Watching a meteor shower together 🌠💞",
     bedCoopReaction: "Sweet dreams side by side Zzz 💞🌙",
     tableCoopReaction: "Sweet tea party for two 🫖🍓💞",
     rugCoopReaction: "Cuddling on the living room rug 🧶💞",
-    zoneGardenLeft: "🌸 Belle's Grove",
-    zoneGardenCenter: "🌳 Center Plaza",
-    zoneGardenRight: "⛲ Firefly Pond",
-    zoneHouseLeft: "🫖 Tea Corner",
-    zoneHouseCenter: "🧶 Cozy Lounge",
-    zoneHouseRight: "🛏️ Bed Suite",
-    cameraFollowMine: "🎯 Follow Me",
-    cameraLookPartner: "🔭 View Partner",
-    cameraFreePan: "🖐️ Free Camera (Reset)",
     spotMailboxLabel: "Wish Mailbox",
     spotTreeLabel: "Love Tree",
+    spotPicnicLabel: "Flower Picnic",
     spotBenchLabel: "Garden Bench",
     spotCampfireLabel: "Campfire",
     spotPondLabel: "Firefly Pond",
     spotStarLabel: "Stargaze Hill",
+    spotSwingLabel: "Forest Swing",
     spotTableLabel: "Tea Table",
     spotRugLabel: "Cozy Rug",
     spotBedLabel: "Canopy Bed",
+    spotJukeboxLabel: "Music Box",
     giftModalTitle: "Leave a gift note right here",
     giftModalDesc: "Place a tiny gift right where your character is standing.",
     giftIconLabel: "Choose icon",
@@ -486,13 +602,20 @@ const copy = {
     giftPlaceBtn: "Place here",
     giftFrom: "left a gift",
     giftRemove: "Pick up",
-    editProfileBtn: "Edit my profile",
-    myCharacterBadge: "MY"
+    editProfileBtn: "Profile & Photo",
+    myCharacterBadge: "ME",
+    menuTitleMe: "My Character Menu",
+    menuTitlePartner: "Interact with Partner",
+    menuTitleGround: "World Menu",
+    walkHereBtn: "Walk Here",
+    openActionMenuBtn: "Actions",
+    affectionTitle: "Couple Level & Affection",
+    affectionDesc: "Earn affection hearts by petting, hugging, kissing, sitting together, and watering our tree!"
   },
   zh: {
-    eyebrow: "OUR 2.5D PANORAMA GARDEN & WIDE HOUSES",
+    eyebrow: "OUR COZY 2.5D COUPLE WORLD",
     title: "我们俩的花园",
-    subtitle: "在宽敞的全景花园与温馨小屋间漫步，在长椅、篝火、爱情树与池塘边实时互动。",
+    subtitle: "穿过小径与木门探索5个空间，右键点击（手机长按）角色或地面即可互动。",
     back: "回到主页",
     edit: "设置我的角色与资料",
     saved: "已保存",
@@ -511,54 +634,66 @@ const copy = {
     photoRemove: "删除",
     photoUploading: "处理中...",
     photoError: "无法读取该照片，请尝试其他图片。",
-    local: "已安全保存在此设备",
-    synced: "实时同步已连接",
-    syncWait: "连接 Firebase 后实时同步",
+    local: "已保存在本地",
+    synced: "实时同步中",
+    syncWait: "连接中...",
     birthdayToday: "今天生日！",
     leaveGift: "留下小礼物",
     emptyBirthday: "请填写生日",
-    tapHintGarden: "点击草地移动或左右拖动浏览花园 · 点击长椅、篝火、爱情树或池塘互动！",
-    tapHintHouse: "在宽敞的房间里散步，或点击茶桌、地毯、床铺休息",
+    tapHintDefault: "点击地面：移动 · 右键点击（手机长按）角色或地面：打开互动菜单",
     tapHintDecor: "装扮模式：点击地面放置装饰物（点击已有装饰物可移除）",
-    timeAuto: "自动",
-    timeDay: "白天",
-    timeSunset: "黄昏",
-    timeNight: "夜晚",
-    mapGarden: "我们俩的花园",
+    timeDay: "晴朗白天",
+    timeSunset: "暖阳黄昏",
+    timeNight: "星光夜晚",
+    mapFlowerForest: "爱情树花林",
+    mapGarden: "中央花园广场",
+    mapStarlightPond: "萤火虫池塘",
     mapBelleHouse: "Belle 的小屋",
     mapPartnerHouse: "小狗的小屋",
+    shortForest: "🌸 花林",
+    shortGarden: "🌳 广场",
+    shortPond: "⛲ 池塘",
+    shortBelleHouse: "🏡 Belle家",
+    shortPartnerHouse: "🏡 小狗家",
     enterBelleHouse: "进入 Belle 的小屋",
     enterPartnerHouse: "进入小狗的小屋",
-    exitToGarden: "回到花园",
-    controllingLabel: "正在操控",
+    exitToGarden: "回到中央广场",
     onlyMyCharacterNotice: "只能操控与修改自己的角色哦 ♡",
     partnerOnline: "实时在线",
     partnerOffline: "休息中",
-    followPartner: "跟随前往 →",
-    sameMapNear: "你们靠得很近啦！快试试实时互动吧",
-    sameMapFar: "你们在同一个空间！跑过去靠近对方吧",
-    differentMapInfo: "目前在另一个空间",
-    approachPartnerBtn: "跑到对方身边",
+    followPartner: "跟随",
+    approachPartnerBtn: "过去贴贴",
+    coopPet: "摸摸头",
     coopHug: "拥抱贴贴",
+    coopKiss: "飞吻爱心",
     coopFeed: "喂草莓零食",
     coopFlower: "送小花",
+    coopDance: "一起跳舞",
     coopJump: "一起跳跳",
+    coopHighfive: "击掌庆贺",
+    coopPhoto: "情侣纪念拍照",
     coopNap: "并肩午睡",
-    decorateBtn: "装扮花园与小屋",
+    decorateBtn: "装扮空间",
     decorateDone: "完成装扮",
     decorateReset: "恢复默认",
-    speechPlaceholder: "输入文字在角色头顶弹出气泡...",
+    speechPlaceholder: "输入头顶气泡文字...",
     speechSend: "发送",
-    quickChips: ["♡", "好想你！", "来坐长椅 🪑", "点燃篝火 🔥", "来我家玩吧 🏡"],
+    quickChips: ["♡", "好想你！", "快过来~ 🐾", "最爱你 💞", "来我家玩 🏡"],
     pettedReaction: "最喜欢摸摸头啦 ♡",
-    hugReaction: "紧紧抱住你 ♡",
-    snackReaction: "草莓真好吃！🍓",
+    hugReaction: "紧紧抱住你 💞",
+    kissReaction: "啾~ 给你飞吻 💋💘",
+    snackReaction: "草莓真甜！🍓",
     flowerReaction: "送你一朵香香的花 🌷",
+    danceReaction: "一起开心地跳舞吧 🎶💃",
     jumpReaction: "开心跳一跳！✨",
+    highfiveReaction: "耶！默契击掌 🙌✨",
+    photoReaction: "一二三，茄子！📸💖",
     napReaction: "呼呼午睡中... Zzz",
     bedReaction: "软绵绵的床最舒服啦 Zzz",
     tableReaction: "甜甜的下午茶 🍓♪",
     rugReaction: "客厅的软地毯最温馨啦 🧶♡",
+    jukeboxReaction: "流淌着浪漫的旋律 📻🎵",
+    jukeboxCoopReaction: "两个人一起听歌摇摆 🎶💞",
     benchReaction: "坐在长椅上吹风真舒服 🍃",
     benchCoopReaction: "肩并肩坐在长椅上好幸福 💞",
     campfireOnReaction: "点燃篝火啦！暖洋洋的 🔥🍓",
@@ -566,32 +701,30 @@ const copy = {
     campfireCoopReaction: "两个人一起围炉烤火真甜蜜 🔥💛",
     treeWaterReaction: "给我们的爱情树浇浇水 💧🌸",
     treeCoopReaction: "爱情树洒下了浪漫的花瓣雨 🌸💞",
+    picnicReaction: "在花田野餐垫上享用了点心 🧺🍓",
+    picnicCoopReaction: "甜蜜的花田野餐约会 🧺💞",
     pondReaction: "在池塘边踩水玩真凉快 🐠🫧",
     pondCoopReaction: "池塘上升起了萤火虫与睡莲微光 ✨🪷",
+    swingReaction: "在森林木秋千上轻轻摇晃 🎶🌿",
+    swingCoopReaction: "两个人并肩荡秋千真浪漫 🎶💞",
     mailboxReaction: "看看心愿邮筒里的信 📮💌",
     starReaction: "看！望远镜那边有流星划过 🌠",
     starCoopReaction: "两个人一起看漫天流星雨 🌠💞",
     bedCoopReaction: "并肩躺在床上做个好梦 Zzz 💞🌙",
     tableCoopReaction: "面对面享受甜蜜下午茶 🫖🍓💞",
     rugCoopReaction: "在地毯上贴贴休息 🧶💞",
-    zoneGardenLeft: "🌸 花语森林",
-    zoneGardenCenter: "🌳 中央广场",
-    zoneGardenRight: "⛲ 萤火池塘",
-    zoneHouseLeft: "🫖 茶歇角落",
-    zoneHouseCenter: "🧶 客厅地毯",
-    zoneHouseRight: "🛏️ 卧室床铺",
-    cameraFollowMine: "🎯 跟随自己",
-    cameraLookPartner: "🔭 查看对方",
-    cameraFreePan: "🖐️ 自由视角 (回中)",
     spotMailboxLabel: "心愿邮筒",
     spotTreeLabel: "爱情树",
+    spotPicnicLabel: "花田野餐",
     spotBenchLabel: "街灯长椅",
     spotCampfireLabel: "星光篝火",
     spotPondLabel: "萤火池塘",
     spotStarLabel: "观星山丘",
+    spotSwingLabel: "森林秋千",
     spotTableLabel: "下午茶桌",
     spotRugLabel: "软绵地毯",
     spotBedLabel: "温馨床铺",
+    spotJukeboxLabel: "浪漫点唱机",
     giftModalTitle: "在这里留下小礼物与纸条",
     giftModalDesc: "在你角色站立的位置放一份小礼物，对方就能发现。",
     giftIconLabel: "选择图标",
@@ -600,10 +733,24 @@ const copy = {
     giftPlaceBtn: "放在这里",
     giftFrom: "留下的小礼物",
     giftRemove: "收起礼物",
-    editProfileBtn: "修改我的资料",
-    myCharacterBadge: "我"
+    editProfileBtn: "修改资料与头像",
+    myCharacterBadge: "我",
+    menuTitleMe: "我的角色菜单",
+    menuTitlePartner: "与对方互动",
+    menuTitleGround: "空间菜单",
+    walkHereBtn: "走到这里",
+    openActionMenuBtn: "互动菜单",
+    affectionTitle: "情侣等级与爱意值",
+    affectionDesc: "摸摸头、拥抱、飞吻、一起坐下或给爱情树浇水都能增加爱意值！"
   }
 };
+
+function sanitizeMapId(raw?: string): WorldMapId {
+  if (raw && (VALID_MAPS as string[]).includes(raw)) {
+    return raw as WorldMapId;
+  }
+  return "garden";
+}
 
 export function loadLocalProfiles(): Record<Role, CharacterProfile> {
   try {
@@ -613,13 +760,27 @@ export function loadLocalProfiles(): Record<Role, CharacterProfile> {
         ...defaults.belle,
         ...stored.belle,
         role: "belle",
-        species: stored.belle?.species === "rabbit" ? "rabbit" : "cat"
+        species: stored.belle?.species === "rabbit" ? "rabbit" : "cat",
+        currentMap: sanitizeMapId(stored.belle?.currentMap),
+        x: typeof stored.belle?.x === "number" ? clamp(stored.belle.x, 12, 88) : defaults.belle.x,
+        y: typeof stored.belle?.y === "number" ? clamp(stored.belle.y, 46, 86) : defaults.belle.y,
+        direction: stored.belle?.direction === -1 ? -1 : 1,
+        liveMood: stored.belle?.liveMood || "idle",
+        activeSpotId: stored.belle?.activeSpotId ?? null,
+        lastActiveMs: stored.belle?.lastActiveMs || 0
       },
       partner: {
         ...defaults.partner,
         ...stored.partner,
         role: "partner",
-        species: "dog"
+        species: "dog",
+        currentMap: sanitizeMapId(stored.partner?.currentMap),
+        x: typeof stored.partner?.x === "number" ? clamp(stored.partner.x, 12, 88) : defaults.partner.x,
+        y: typeof stored.partner?.y === "number" ? clamp(stored.partner.y, 46, 86) : defaults.partner.y,
+        direction: stored.partner?.direction === 1 ? 1 : -1,
+        liveMood: stored.partner?.liveMood || "idle",
+        activeSpotId: stored.partner?.activeSpotId ?? null,
+        lastActiveMs: stored.partner?.lastActiveMs || 0
       }
     };
   } catch {
@@ -654,25 +815,44 @@ function loadLocalDecors(): PlacedDecoration[] {
 function loadLocalWorldProps(): WorldEnvironmentProps {
   try {
     const raw = localStorage.getItem(GARDEN_WORLD_PROPS_STORAGE_KEY);
-    if (!raw) return { campfireLit: true, coupleTreeExp: 2 };
+    if (!raw) {
+      return {
+        campfireLit: true,
+        coupleTreeExp: 2,
+        jukeboxPlaying: true,
+        affectionExp: 120,
+        interactionCount: 8
+      };
+    }
     const parsed = JSON.parse(raw) as WorldEnvironmentProps;
     return {
       campfireLit: parsed.campfireLit ?? true,
       coupleTreeExp: typeof parsed.coupleTreeExp === "number" ? parsed.coupleTreeExp : 2,
       lastWateredBy: parsed.lastWateredBy,
       petalShowerAtMs: parsed.petalShowerAtMs,
-      meteorShowerAtMs: parsed.meteorShowerAtMs
+      meteorShowerAtMs: parsed.meteorShowerAtMs,
+      jukeboxPlaying: parsed.jukeboxPlaying ?? true,
+      affectionExp: typeof parsed.affectionExp === "number" ? parsed.affectionExp : 120,
+      interactionCount: typeof parsed.interactionCount === "number" ? parsed.interactionCount : 8,
+      lastInteractionText: parsed.lastInteractionText,
+      lastInteractionAtMs: parsed.lastInteractionAtMs
     };
   } catch {
-    return { campfireLit: true, coupleTreeExp: 2 };
+    return {
+      campfireLit: true,
+      coupleTreeExp: 2,
+      jukeboxPlaying: true,
+      affectionExp: 120,
+      interactionCount: 8
+    };
   }
 }
 
-function getRealTimeOfDay(): TimeOfDay {
-  const hour = new Date().getHours();
-  if (hour >= 6 && hour < 17) return "day";
-  if (hour >= 17 && hour < 20) return "sunset";
-  return "night";
+function loadSavedTimeTheme(): TimeThemeMode {
+  const saved = localStorage.getItem(GARDEN_TIME_THEME_KEY);
+  if (saved === "day" || saved === "sunset" || saved === "night") return saved;
+  // Default to bright, vivid DAY mode so the garden is never dark or muddy unless chosen!
+  return "day";
 }
 
 function isBirthdayToday(value: string) {
@@ -686,28 +866,22 @@ function clamp(val: number, min: number, max: number) {
   return Math.max(min, Math.min(max, val));
 }
 
-// Smart obstacle & boundary clamping so characters don't walk on cottage roofs or deep pond water
 function resolveWalkableTarget(rawX: number, rawY: number, mapId: WorldMapId): Point2D {
-  const minX = mapId === "garden" ? 8 : 12;
-  const maxX = mapId === "garden" ? 92 : 88;
-  const minY = mapId === "garden" ? 44 : 48;
-  const maxY = mapId === "garden" ? 88 : 85;
+  const isHouse = mapId === "belle_house" || mapId === "partner_house";
+  const minX = isHouse ? 14 : 10;
+  const maxX = isHouse ? 86 : 90;
+  const minY = isHouse ? 48 : 46;
+  const maxY = isHouse ? 85 : 86;
 
   let x = clamp(Math.round(rawX), minX, maxX);
   let y = clamp(Math.round(rawY), minY, maxY);
 
   if (mapId === "garden") {
-    // Belle's Cottage roof/wall area (top-left)
-    if (x < 23 && y < 51) {
-      y = 52;
-    }
-    // Partner's Cottage roof/wall area (top-right)
-    if (x > 77 && y < 51) {
-      y = 52;
-    }
-    // Firefly Pond deep water center (push to stepping-stone shore)
-    if (x >= 70 && x <= 80 && y >= 69 && y <= 76) {
-      x = x < 75 ? 68 : 81;
+    if (x < 26 && y < 52) y = 53;
+    if (x > 74 && y < 52) y = 53;
+  } else if (mapId === "starlight_pond") {
+    if (x >= 52 && x <= 74 && y >= 66 && y <= 76) {
+      x = x < 63 ? 50 : 76;
     }
   }
   return { x, y };
@@ -759,34 +933,25 @@ export default function CharacterWorld({
   const [saved, setSaved] = useState(false);
   const [ownershipNotice, setOwnershipNotice] = useState("");
 
-  // 2.5D World & Map states
-  const [timeMode, setTimeMode] = useState<TimeThemeMode>("auto");
-  const timeOfDay: TimeOfDay = timeMode === "auto" ? getRealTimeOfDay() : timeMode;
+  // Bright by default ("day"), persisted when changed
+  const [timeMode, setTimeMode] = useState<TimeThemeMode>(loadSavedTimeTheme);
+  const timeOfDay: TimeOfDay = timeMode;
 
+  const updateTimeTheme = (nextTheme: TimeThemeMode) => {
+    setTimeMode(nextTheme);
+    localStorage.setItem(GARDEN_TIME_THEME_KEY, nextTheme);
+  };
+
+  // Persistent map, position, direction, mood, and active spot
   const [maps, setMaps] = useState<Record<Role, WorldMapId>>(() => {
     const initial = loadLocalProfiles();
     return {
-      belle: initial.belle.currentMap || "garden",
-      partner: initial.partner.currentMap || "garden"
+      belle: sanitizeMapId(initial.belle.currentMap),
+      partner: sanitizeMapId(initial.partner.currentMap)
     };
   });
   const currentMap = maps[currentRole];
 
-  const [mood, setMood] = useState<Record<Role, PetMood>>({ belle: "idle", partner: "idle" });
-  const [positions, setPositions] = useState<Record<Role, Point2D>>(() => {
-    const initial = loadLocalProfiles();
-    return {
-      belle: { x: initial.belle.x ?? 42, y: initial.belle.y ?? 66 },
-      partner: { x: initial.partner.x ?? 58, y: initial.partner.y ?? 68 }
-    };
-  });
-  const [directions, setDirections] = useState<Record<Role, 1 | -1>>(() => {
-    const initial = loadLocalProfiles();
-    return {
-      belle: initial.belle.direction ?? 1,
-      partner: initial.partner.direction ?? -1
-    };
-  });
   const [activeSpots, setActiveSpots] = useState<Record<Role, InteractiveSpotId | null>>(() => {
     const initial = loadLocalProfiles();
     return {
@@ -794,32 +959,64 @@ export default function CharacterWorld({
       partner: initial.partner.activeSpotId ?? null
     };
   });
-  const [moveDurations, setMoveDurations] = useState<Record<Role, number>>({ belle: 2.0, partner: 2.0 });
+
+  const [mood, setMood] = useState<Record<Role, PetMood>>(() => {
+    const initial = loadLocalProfiles();
+    const resolveInitialMood = (role: Role): PetMood => {
+      const spot = initial[role].activeSpotId;
+      if (spot && SPOT_RESTING_MOOD[spot]) return SPOT_RESTING_MOOD[spot]!;
+      if (initial[role].liveMood && initial[role].liveMood !== "walk" && initial[role].liveMood !== "run") {
+        return initial[role].liveMood!;
+      }
+      return "idle";
+    };
+    return {
+      belle: resolveInitialMood("belle"),
+      partner: resolveInitialMood("partner")
+    };
+  });
+
+  const [positions, setPositions] = useState<Record<Role, Point2D>>(() => {
+    const initial = loadLocalProfiles();
+    return {
+      belle: { x: initial.belle.x ?? 40, y: initial.belle.y ?? 66 },
+      partner: { x: initial.partner.x ?? 60, y: initial.partner.y ?? 66 }
+    };
+  });
+
+  const [directions, setDirections] = useState<Record<Role, 1 | -1>>(() => {
+    const initial = loadLocalProfiles();
+    return {
+      belle: initial.belle.direction ?? 1,
+      partner: initial.partner.direction ?? -1
+    };
+  });
+
+  const [moveDurations, setMoveDurations] = useState<Record<Role, number>>({ belle: 1.8, partner: 1.8 });
   const [speechBubble, setSpeechBubble] = useState<Partial<Record<Role, string>>>({});
   const [speechDraft, setSpeechDraft] = useState("");
   const [tapTarget, setTapTarget] = useState<{ x: number; y: number; key: number } | null>(null);
-  const [burstHearts, setBurstHearts] = useState<Array<{ id: number; x: number; y: number; symbol?: string }>>([]);
+  const [burstHearts, setBurstHearts] = useState<Array<{ id: number; x: number; y: number; symbol?: string; label?: string }>>([]);
+  const [cameraFlashActive, setCameraFlashActive] = useState(false);
+  const [mapTransitionBanner, setMapTransitionBanner] = useState<string>("");
 
-  // Phase 1: Wide Panorama Camera & Viewport States
-  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() =>
-    typeof window !== "undefined" ? window.innerWidth <= 680 : false
-  );
-  const [cameraMode, setCameraMode] = useState<"follow" | "partner" | "free">("follow");
-  const [manualPanX, setManualPanX] = useState<number>(-20);
-  const [isDraggingStage, setIsDraggingStage] = useState<boolean>(false);
+  // Context Menu (Right-click on PC / Long-press on Mobile)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [affectionModalOpen, setAffectionModalOpen] = useState(false);
+  const [minimapExpanded, setMinimapExpanded] = useState(false);
 
-  // Phase 2: Shared Interactive Environment Props (Campfire, Couple Love Tree, Sky Showers)
+  // Shared Interactive Environment Props (Campfire, Love Tree, Affection & Level)
   const [worldProps, setWorldProps] = useState<WorldEnvironmentProps>(loadLocalWorldProps);
   const [petalShowerActive, setPetalShowerActive] = useState<boolean>(false);
   const [meteorShowerActive, setMeteorShowerActive] = useState<boolean>(false);
   const [pondSplashActive, setPondSplashActive] = useState<boolean>(false);
 
-  // Garden & Room Decorations
+  // Decorations
   const [decorations, setDecorations] = useState<PlacedDecoration[]>(loadLocalDecors);
   const [decorating, setDecorating] = useState(false);
   const [selectedDecorType, setSelectedDecorType] = useState<DecorationType>("flower_pink");
 
-  // Gift Note in World
+  // Gift Note
   const [gardenGift, setGardenGift] = useState<GardenGiftNote | null>(loadLocalGift);
   const [giftModalOpen, setGiftModalOpen] = useState(false);
   const [giftOpenView, setGiftOpenView] = useState(false);
@@ -827,20 +1024,9 @@ export default function CharacterWorld({
   const [giftTextDraft, setGiftTextDraft] = useState("");
 
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const dragStateRef = useRef<{
-    pointerDown: boolean;
-    moved: boolean;
-    startClientX: number;
-    startClientY: number;
-    startPanPct: number;
-  }>({
-    pointerDown: false,
-    moved: false,
-    startClientX: 0,
-    startClientY: 0,
-    startPanPct: 0
-  });
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressTriggeredRef = useRef<boolean>(false);
+  const pointerDownPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const moodResetTimers = useRef<Partial<Record<Role, number>>>({});
   const portalTimerRef = useRef<number | null>(null);
   const petalTimerRef = useRef<number | null>(null);
@@ -852,8 +1038,12 @@ export default function CharacterWorld({
   const lastSynergySpotRef = useRef<string>("");
   const lastRemoteSpeechAt = useRef<Record<Role, number>>({ belle: 0, partner: 0 });
   const lastRemoteActionAt = useRef<Record<Role, number>>({ belle: 0, partner: 0 });
-  const lastRemoteSyncMs = useRef<Record<Role, number>>({ belle: 0, partner: 0 });
+  const lastRemoteSyncMs = useRef<Record<Role, number>>({
+    belle: loadLocalProfiles().belle.lastActiveMs || 0,
+    partner: loadLocalProfiles().partner.lastActiveMs || 0
+  });
   const initialLoadDone = useRef<Record<Role, boolean>>({ belle: false, partner: false });
+
   const positionsRef = useRef(positions);
   positionsRef.current = positions;
   const directionsRef = useRef(directions);
@@ -862,30 +1052,10 @@ export default function CharacterWorld({
   mapsRef.current = maps;
   const activeSpotsRef = useRef(activeSpots);
   activeSpotsRef.current = activeSpots;
-
-  // Panorama Canvas Scale: Wide Garden (220% mobile / 165% desktop) & Wide Houses (175% mobile / 135% desktop)
-  const worldScaleX =
-    currentMap === "garden"
-      ? isMobileViewport
-        ? 2.2
-        : 1.65
-      : isMobileViewport
-        ? 1.75
-        : 1.35;
-
-  const minCameraPanPct = ((1 - worldScaleX) / worldScaleX) * 100;
-  const computeCameraPanForX = (worldX: number) =>
-    clamp(50 / worldScaleX - worldX, minCameraPanPct, 0);
-
-  const activeCameraPanX = useMemo(() => {
-    if (cameraMode === "free") {
-      return clamp(manualPanX, minCameraPanPct, 0);
-    }
-    if (cameraMode === "partner" && maps[otherRole] === currentMap) {
-      return computeCameraPanForX(positions[otherRole].x);
-    }
-    return computeCameraPanForX(positions[currentRole].x);
-  }, [cameraMode, manualPanX, minCameraPanPct, worldScaleX, maps, otherRole, currentMap, positions, currentRole]);
+  const moodRef = useRef(mood);
+  moodRef.current = mood;
+  const worldPropsRef = useRef(worldProps);
+  worldPropsRef.current = worldProps;
 
   useEffect(() => {
     document.querySelector<HTMLElement>(".main-content")?.scrollTo({ top: 0, behavior: "auto" });
@@ -893,10 +1063,8 @@ export default function CharacterWorld({
       const img = new Image();
       img.src = characterAsset(file);
     });
-    const onResize = () => setIsMobileViewport(window.innerWidth <= 680);
-    window.addEventListener("resize", onResize);
     return () => {
-      window.removeEventListener("resize", onResize);
+      if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
       if (portalTimerRef.current) window.clearTimeout(portalTimerRef.current);
       if (petalTimerRef.current) window.clearTimeout(petalTimerRef.current);
       if (meteorTimerRef.current) window.clearTimeout(meteorTimerRef.current);
@@ -927,15 +1095,37 @@ export default function CharacterWorld({
     }
   };
 
+  // Immediately save my character's latest position/map/mood/spot to localStorage so reload never loses state
+  const persistMyLiveStateLocally = (patch: Partial<CharacterProfile>) => {
+    setProfiles((current) => {
+      const updatedRoleProfile: CharacterProfile = {
+        ...current[currentRole],
+        ...patch,
+        role: currentRole,
+        lastActiveMs: patch.lastActiveMs ?? Date.now()
+      };
+      const next = {
+        ...current,
+        [currentRole]: updatedRoleProfile
+      };
+      localStorage.setItem(CHARACTER_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
   const persistWorldPropsLocal = (nextProps: WorldEnvironmentProps) => {
+    worldPropsRef.current = nextProps;
     setWorldProps(nextProps);
     localStorage.setItem(GARDEN_WORLD_PROPS_STORAGE_KEY, JSON.stringify(nextProps));
   };
 
-  // Push my real-time state to both topics/__garden_{role} (guaranteed permission) and couple_characters/{role}
+  // Push my real-time state to both topics/__garden_{role} and couple_characters/{role}
   const syncMyStateToCloud = async (patch: Partial<CharacterProfile>) => {
-    if (!isFirebaseConfigured || !db || !auth?.currentUser) return;
     const nowMs = Date.now();
+    persistMyLiveStateLocally({ ...patch, lastActiveMs: nowMs });
+    lastRemoteSyncMs.current[currentRole] = nowMs;
+
+    if (!isFirebaseConfigured || !db || !auth?.currentUser) return;
     const email = auth.currentUser.email || "";
     const basePayload = {
       ...patch,
@@ -963,7 +1153,6 @@ export default function CharacterWorld({
     }
   };
 
-  // Push shared world state (coopEvent, decorations, giftNote, worldProps) to both topics/__garden_world and character_world/main
   const syncWorldStateToCloud = async (patch: Record<string, unknown>) => {
     if (!isFirebaseConfigured || !db || !auth?.currentUser) return;
     const nowMs = Date.now();
@@ -982,6 +1171,26 @@ export default function CharacterWorld({
     ]);
   };
 
+  // Gain Couple Affection EXP & sync across both screens
+  const addAffectionExp = async (gain: number, labelText: string, burstPos?: Point2D, symbol = "💞") => {
+    const cur = worldPropsRef.current;
+    const nextExp = (cur.affectionExp || 120) + gain;
+    const nextCount = (cur.interactionCount || 8) + 1;
+    const nowMs = Date.now();
+    const nextProps: WorldEnvironmentProps = {
+      ...cur,
+      affectionExp: nextExp,
+      interactionCount: nextCount,
+      lastInteractionText: `${labelText} (+${gain} ♥)`,
+      lastInteractionAtMs: nowMs
+    };
+    persistWorldPropsLocal(nextProps);
+    if (burstPos) {
+      triggerHeartBurst(burstPos.x, burstPos.y, symbol, `+${gain} ♥`);
+    }
+    await syncWorldStateToCloud({ worldProps: nextProps });
+  };
+
   useEffect(() => {
     if (!userPhotoUrl) return;
     setProfiles((current) => {
@@ -995,24 +1204,28 @@ export default function CharacterWorld({
     });
   }, [userPhotoUrl, currentRole]);
 
-  const triggerHeartBurst = (x: number, y: number, symbol?: string) => {
+  const triggerHeartBurst = (x: number, y: number, symbol?: string, label?: string) => {
     const id = Date.now() + Math.round(Math.random() * 1000);
-    setBurstHearts((prev) => [...prev.slice(-6), { id, x, y, symbol }]);
+    setBurstHearts((prev) => [...prev.slice(-6), { id, x, y, symbol, label }]);
     window.setTimeout(() => {
       setBurstHearts((prev) => prev.filter((item) => item.id !== id));
-    }, 1500);
+    }, 1650);
   };
 
   const setTemporaryMood = (role: Role, nextMood: PetMood, durationMs: number, bubbleText?: string) => {
     if (moodResetTimers.current[role]) {
       window.clearTimeout(moodResetTimers.current[role]);
     }
+    moodRef.current = { ...moodRef.current, [role]: nextMood };
     setMood((prev) => ({ ...prev, [role]: nextMood }));
     if (bubbleText) {
       setSpeechBubble((prev) => ({ ...prev, [role]: bubbleText }));
     }
     moodResetTimers.current[role] = window.setTimeout(() => {
-      setMood((prev) => ({ ...prev, [role]: "idle" }));
+      const spot = activeSpotsRef.current[role];
+      const fallbackMood: PetMood = (spot && SPOT_RESTING_MOOD[spot]) || "idle";
+      moodRef.current = { ...moodRef.current, [role]: fallbackMood };
+      setMood((prev) => ({ ...prev, [role]: fallbackMood }));
       if (bubbleText) {
         setSpeechBubble((prev) => {
           const copyBubble = { ...prev };
@@ -1036,7 +1249,7 @@ export default function CharacterWorld({
     const dx = target.x - current.x;
     const dy = target.y - current.y;
     const dist = Math.hypot(dx, dy);
-    const durationSec = clamp(dist * 0.058, 1.1, 2.8);
+    const durationSec = clamp(dist * 0.048, 0.9, 2.3);
 
     setMoveDurations((d) => ({ ...d, [role]: durationSec }));
     const nextDir: 1 | -1 =
@@ -1060,7 +1273,7 @@ export default function CharacterWorld({
     return { durationSec, nextDir };
   };
 
-  // Move ONLY the current user's character and sync to Firestore
+  // Move ONLY the current user's character and persist + sync to Firestore
   const moveMyCharacterTo = (
     target: Point2D,
     moveMood: PetMood = "walk",
@@ -1070,7 +1283,6 @@ export default function CharacterWorld({
     spotId: InteractiveSpotId | null = null,
     forcedDirection?: 1 | -1
   ) => {
-    setCameraMode("follow");
     activeSpotsRef.current = { ...activeSpotsRef.current, [currentRole]: spotId };
     setActiveSpots((prev) => ({ ...prev, [currentRole]: spotId }));
 
@@ -1084,12 +1296,15 @@ export default function CharacterWorld({
       forcedDirection
     );
     const nowMs = Date.now();
+    const persistedMood: PetMood =
+      endMood !== "idle" ? endMood : (spotId && SPOT_RESTING_MOOD[spotId]) || "idle";
+
     void syncMyStateToCloud({
       x: target.x,
       y: target.y,
       direction: nextDir,
       currentMap: mapsRef.current[currentRole],
-      liveMood: endMood !== "idle" ? endMood : moveMood,
+      liveMood: persistedMood,
       activeSpotId: spotId,
       actionAtMs: nowMs,
       ...(bubbleAfter ? { speechText: bubbleAfter, speechAtMs: nowMs } : {})
@@ -1097,19 +1312,18 @@ export default function CharacterWorld({
     return durationSec;
   };
 
-  // Execute a shared Co-op event on both screens simultaneously
   const executeCoopEventLocally = (evt: CoopEventPayload) => {
     if (evt.mapId && mapsRef.current[otherRole] !== evt.mapId) {
       mapsRef.current = { ...mapsRef.current, [otherRole]: evt.mapId };
       setMaps((prev) => ({ ...prev, [otherRole]: evt.mapId }));
     }
     const belleTarget: Point2D = {
-      x: clamp(evt.centerX - 6, 14, 84),
-      y: clamp(evt.centerY, 48, 84)
+      x: clamp(evt.centerX - 7, 16, 82),
+      y: clamp(evt.centerY, 50, 82)
     };
     const partnerTarget: Point2D = {
-      x: clamp(evt.centerX + 6, 16, 86),
-      y: clamp(evt.centerY + 1, 48, 84)
+      x: clamp(evt.centerX + 7, 18, 84),
+      y: clamp(evt.centerY + 1, 50, 82)
     };
 
     if (evt.type === "hug" || evt.type === "pet") {
@@ -1118,40 +1332,65 @@ export default function CharacterWorld({
       animateCharacterTo("partner", partnerTarget, "walk", "love", reactionText, 4200, -1);
       window.setTimeout(() => {
         setDirections({ belle: 1, partner: -1 });
-        triggerHeartBurst(evt.centerX, evt.centerY - 14, "💞");
-      }, 650);
+        triggerHeartBurst(evt.centerX, evt.centerY - 14, "💞", evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
+      }, 600);
+    } else if (evt.type === "kiss") {
+      animateCharacterTo("belle", belleTarget, "walk", "love", t.kissReaction, 4400, 1);
+      animateCharacterTo("partner", partnerTarget, "walk", "love", t.kissReaction, 4400, -1);
+      window.setTimeout(() => {
+        setDirections({ belle: 1, partner: -1 });
+        triggerHeartBurst(evt.centerX, evt.centerY - 16, "💋", evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
+      }, 550);
     } else if (evt.type === "feed") {
       animateCharacterTo("belle", belleTarget, "walk", "snack", t.snackReaction, 4800, 1);
       animateCharacterTo("partner", partnerTarget, "walk", "snack", t.snackReaction, 4800, -1);
       window.setTimeout(() => {
         setDirections({ belle: 1, partner: -1 });
-        triggerHeartBurst(evt.centerX, evt.centerY - 14, "🍓");
-      }, 650);
+        triggerHeartBurst(evt.centerX, evt.centerY - 14, "🍓", evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
+      }, 600);
     } else if (evt.type === "flower") {
       animateCharacterTo("belle", belleTarget, "walk", "happy", t.flowerReaction, 4200, 1);
       animateCharacterTo("partner", partnerTarget, "walk", "happy", t.flowerReaction, 4200, -1);
       window.setTimeout(() => {
         setDirections({ belle: 1, partner: -1 });
-        triggerHeartBurst(evt.centerX, evt.centerY - 14, "🌷");
-      }, 650);
-    } else if (evt.type === "jump") {
-      animateCharacterTo("belle", belleTarget, "walk", "jump", t.jumpReaction, 3600, 1);
-      animateCharacterTo("partner", partnerTarget, "walk", "jump", t.jumpReaction, 3600, -1);
+        triggerHeartBurst(evt.centerX, evt.centerY - 14, "🌷", evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
+      }, 600);
+    } else if (evt.type === "dance") {
+      animateCharacterTo("belle", belleTarget, "walk", "jump", t.danceReaction, 4400, 1);
+      animateCharacterTo("partner", partnerTarget, "walk", "jump", t.danceReaction, 4400, -1);
       window.setTimeout(() => {
         setDirections({ belle: 1, partner: -1 });
-        triggerHeartBurst(evt.centerX, evt.centerY - 16, "✨");
+        triggerHeartBurst(evt.centerX, evt.centerY - 16, "🎶", evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
       }, 500);
-    } else if (evt.type === "nap") {
-      animateCharacterTo("belle", belleTarget, "walk", "sleep", t.napReaction, 6000, 1);
-      animateCharacterTo("partner", partnerTarget, "walk", "sleep", t.napReaction, 6000, -1);
+    } else if (evt.type === "jump" || evt.type === "highfive") {
+      const text = evt.type === "highfive" ? t.highfiveReaction : t.jumpReaction;
+      const sym = evt.type === "highfive" ? "🙌" : "✨";
+      animateCharacterTo("belle", belleTarget, "walk", "jump", text, 3800, 1);
+      animateCharacterTo("partner", partnerTarget, "walk", "jump", text, 3800, -1);
       window.setTimeout(() => {
         setDirections({ belle: 1, partner: -1 });
-        triggerHeartBurst(evt.centerX, evt.centerY - 12, "💤");
-      }, 800);
+        triggerHeartBurst(evt.centerX, evt.centerY - 16, sym, evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
+      }, 500);
+    } else if (evt.type === "photo") {
+      animateCharacterTo("belle", belleTarget, "walk", "love", t.photoReaction, 4500, 1);
+      animateCharacterTo("partner", partnerTarget, "walk", "love", t.photoReaction, 4500, -1);
+      window.setTimeout(() => {
+        setDirections({ belle: 1, partner: -1 });
+        setCameraFlashActive(true);
+        window.setTimeout(() => setCameraFlashActive(false), 650);
+        triggerHeartBurst(evt.centerX, evt.centerY - 16, "📸", evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
+      }, 650);
+    } else if (evt.type === "nap") {
+      animateCharacterTo("belle", belleTarget, "walk", "sleep", t.napReaction, 6500, 1);
+      animateCharacterTo("partner", partnerTarget, "walk", "sleep", t.napReaction, 6500, -1);
+      window.setTimeout(() => {
+        setDirections({ belle: 1, partner: -1 });
+        triggerHeartBurst(evt.centerX, evt.centerY - 12, "💤", evt.affectionGain ? `+${evt.affectionGain} ♥` : undefined);
+      }, 750);
     }
   };
 
-  // Phase 2: Detect 2-Player Co-op Spot Synergy when both occupy the same InteractiveSpotId on the same map
+  // Detect 2-Player Co-op Spot Synergy when both occupy the same InteractiveSpotId on the same map
   const sharedActiveSpot: InteractiveSpotId | null =
     maps.belle === maps.partner &&
     activeSpots.belle &&
@@ -1174,42 +1413,57 @@ export default function CharacterWorld({
       setDirections({ belle: 1, partner: -1 });
       setTemporaryMood("belle", "love", 5200, t.benchCoopReaction);
       setTemporaryMood("partner", "love", 5200, t.benchCoopReaction);
-      triggerHeartBurst(50, 38, "💞");
+      triggerHeartBurst(50, 38, "💞", "+25 ♥");
     } else if (sharedActiveSpot === "campfire") {
       setDirections({ belle: 1, partner: -1 });
       setTemporaryMood("belle", "snack", 5200, t.campfireCoopReaction);
       setTemporaryMood("partner", "snack", 5200, t.campfireCoopReaction);
-      triggerHeartBurst(50, 64, "🔥");
+      triggerHeartBurst(50, 64, "🔥", "+25 ♥");
     } else if (sharedActiveSpot === "couple_tree") {
       setDirections({ belle: 1, partner: -1 });
       setTemporaryMood("belle", "love", 5200, t.treeCoopReaction);
       setTemporaryMood("partner", "love", 5200, t.treeCoopReaction);
-      triggerHeartBurst(33, 36, "🌸");
+      triggerHeartBurst(50, 38, "🌸", "+25 ♥");
       triggerPetalShower();
+    } else if (sharedActiveSpot === "flower_picnic") {
+      setDirections({ belle: 1, partner: -1 });
+      setTemporaryMood("belle", "snack", 5200, t.picnicCoopReaction);
+      setTemporaryMood("partner", "snack", 5200, t.picnicCoopReaction);
+      triggerHeartBurst(72, 62, "🧺", "+25 ♥");
     } else if (sharedActiveSpot === "sparkle_pond") {
       setDirections({ belle: 1, partner: -1 });
       setTemporaryMood("belle", "happy", 5000, t.pondCoopReaction);
       setTemporaryMood("partner", "happy", 5000, t.pondCoopReaction);
-      triggerHeartBurst(74, 64, "🪷");
+      triggerHeartBurst(62, 60, "🪷", "+25 ♥");
     } else if (sharedActiveSpot === "star_observatory") {
       setTemporaryMood("belle", "love", 5200, t.starCoopReaction);
       setTemporaryMood("partner", "love", 5200, t.starCoopReaction);
-      triggerHeartBurst(66, 36, "🌠");
+      triggerHeartBurst(70, 34, "🌠", "+25 ♥");
       triggerMeteorShower();
+    } else if (sharedActiveSpot === "forest_swing") {
+      setDirections({ belle: 1, partner: -1 });
+      setTemporaryMood("belle", "happy", 5200, t.swingCoopReaction);
+      setTemporaryMood("partner", "happy", 5200, t.swingCoopReaction);
+      triggerHeartBurst(32, 44, "🎶", "+25 ♥");
     } else if (sharedActiveSpot === "bed") {
       setTemporaryMood("belle", "sleep", 6200, t.bedCoopReaction);
       setTemporaryMood("partner", "sleep", 6200, t.bedCoopReaction);
-      triggerHeartBurst(midX, midY - 12, "🌙");
+      triggerHeartBurst(midX, midY - 12, "🌙", "+25 ♥");
     } else if (sharedActiveSpot === "tea_table") {
       setDirections({ belle: 1, partner: -1 });
       setTemporaryMood("belle", "snack", 5200, t.tableCoopReaction);
       setTemporaryMood("partner", "snack", 5200, t.tableCoopReaction);
-      triggerHeartBurst(25, 48, "🫖");
+      triggerHeartBurst(24, 48, "🫖", "+25 ♥");
     } else if (sharedActiveSpot === "cozy_rug") {
       setDirections({ belle: 1, partner: -1 });
       setTemporaryMood("belle", "love", 5000, t.rugCoopReaction);
       setTemporaryMood("partner", "love", 5000, t.rugCoopReaction);
-      triggerHeartBurst(48, 58, "🧶");
+      triggerHeartBurst(50, 58, "🧶", "+25 ♥");
+    } else if (sharedActiveSpot === "jukebox") {
+      setDirections({ belle: 1, partner: -1 });
+      setTemporaryMood("belle", "jump", 5000, t.jukeboxCoopReaction);
+      setTemporaryMood("partner", "jump", 5000, t.jukeboxCoopReaction);
+      triggerHeartBurst(46, 38, "🎶", "+25 ♥");
     }
   }, [sharedActiveSpot]);
 
@@ -1220,16 +1474,16 @@ export default function CharacterWorld({
       return;
     }
 
-    // Announce our initial presence & position
+    // Announce our restored position & map so partner immediately sees where we are
     void syncMyStateToCloud({
       x: positionsRef.current[currentRole].x,
       y: positionsRef.current[currentRole].y,
       direction: directionsRef.current[currentRole],
       currentMap: mapsRef.current[currentRole],
+      liveMood: moodRef.current[currentRole],
       activeSpotId: activeSpotsRef.current[currentRole]
     });
 
-    // Heartbeat every 30s while in garden so partner sees live online indicator
     const heartbeatTimer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         void syncMyStateToCloud({
@@ -1237,13 +1491,34 @@ export default function CharacterWorld({
           y: positionsRef.current[currentRole].y,
           direction: directionsRef.current[currentRole],
           currentMap: mapsRef.current[currentRole],
+          liveMood: moodRef.current[currentRole],
           activeSpotId: activeSpotsRef.current[currentRole]
         });
       }
-    }, 30000);
+    }, 25000);
 
-    const handleRemoteCharacterSnapshot = (role: Role, remote: Partial<CharacterProfile>) => {
-      const syncMs = remote.lastActiveMs || remote.actionAtMs || remote.speechAtMs || 0;
+    const handleRemoteCharacterSnapshot = (role: Role, remote: Partial<CharacterProfile> & { syncedAtMs?: number }) => {
+      const syncMs = remote.syncedAtMs || remote.lastActiveMs || remote.actionAtMs || remote.speechAtMs || 0;
+
+      // For MY own role, only apply remote position/map if it came from a strictly newer session on another device
+      if (role === currentRole) {
+        if (syncMs > lastRemoteSyncMs.current[currentRole] + 1500) {
+          lastRemoteSyncMs.current[currentRole] = syncMs;
+          if (remote.currentMap) {
+            const validMap = sanitizeMapId(remote.currentMap);
+            mapsRef.current = { ...mapsRef.current, [currentRole]: validMap };
+            setMaps((prev) => ({ ...prev, [currentRole]: validMap }));
+          }
+          if (typeof remote.x === "number" && typeof remote.y === "number") {
+            positionsRef.current = { ...positionsRef.current, [currentRole]: { x: remote.x, y: remote.y } };
+            setPositions((prev) => ({ ...prev, [currentRole]: { x: remote.x!, y: remote.y! } }));
+          }
+        }
+        setSyncState("synced");
+        return;
+      }
+
+      // For the OTHER player's character: ignore outdated snapshots so dual-collection listeners never stutter
       if (syncMs > 0 && syncMs < lastRemoteSyncMs.current[role]) {
         return;
       }
@@ -1259,6 +1534,7 @@ export default function CharacterWorld({
             ...current[role],
             ...remote,
             role,
+            currentMap: sanitizeMapId(remote.currentMap || current[role].currentMap),
             species: role === "partner" ? "dog" : remote.species === "rabbit" ? "rabbit" : "cat"
           }
         } as Record<Role, CharacterProfile>;
@@ -1269,85 +1545,84 @@ export default function CharacterWorld({
         return next;
       });
 
-      // If this is the OTHER player's character, smoothly animate their real-time movement/map/spot/speech!
-      if (role !== currentRole) {
-        const isFirst = !initialLoadDone.current[role];
-        initialLoadDone.current[role] = true;
+      const isFirst = !initialLoadDone.current[role];
+      initialLoadDone.current[role] = true;
 
-        if (remote.currentMap) {
-          mapsRef.current = { ...mapsRef.current, [role]: remote.currentMap };
-          setMaps((prev) => (prev[role] === remote.currentMap ? prev : { ...prev, [role]: remote.currentMap! }));
-        }
+      const remoteMap = remote.currentMap ? sanitizeMapId(remote.currentMap) : mapsRef.current[role];
+      const mapChanged = remoteMap !== mapsRef.current[role];
+      if (mapChanged) {
+        mapsRef.current = { ...mapsRef.current, [role]: remoteMap };
+        setMaps((prev) => ({ ...prev, [role]: remoteMap }));
+      }
 
-        if ("activeSpotId" in remote) {
-          const nextSpot = remote.activeSpotId ?? null;
-          activeSpotsRef.current = { ...activeSpotsRef.current, [role]: nextSpot };
-          setActiveSpots((prev) => (prev[role] === nextSpot ? prev : { ...prev, [role]: nextSpot }));
-        }
+      if ("activeSpotId" in remote) {
+        const nextSpot = remote.activeSpotId ?? null;
+        activeSpotsRef.current = { ...activeSpotsRef.current, [role]: nextSpot };
+        setActiveSpots((prev) => (prev[role] === nextSpot ? prev : { ...prev, [role]: nextSpot }));
+      }
 
-        const endMood: PetMood =
-          remote.liveMood && remote.liveMood !== "run" && remote.liveMood !== "walk"
-            ? remote.liveMood
-            : "idle";
-        const moveMood: PetMood = remote.liveMood === "run" ? "run" : "walk";
+      const spotRestMood = remote.activeSpotId ? SPOT_RESTING_MOOD[remote.activeSpotId] : undefined;
+      const endMood: PetMood =
+        remote.liveMood && remote.liveMood !== "run" && remote.liveMood !== "walk"
+          ? remote.liveMood
+          : spotRestMood || "idle";
+      const moveMood: PetMood = remote.liveMood === "run" ? "run" : "walk";
 
-        if (typeof remote.x === "number" && typeof remote.y === "number") {
-          const curPos = positionsRef.current[role];
-          const dist = Math.hypot(remote.x - curPos.x, remote.y - curPos.y);
+      if (typeof remote.x === "number" && typeof remote.y === "number") {
+        const curPos = positionsRef.current[role];
+        const dist = Math.hypot(remote.x - curPos.x, remote.y - curPos.y);
 
-          if (isFirst) {
-            positionsRef.current = { ...positionsRef.current, [role]: { x: remote.x, y: remote.y } };
-            setPositions((prev) => ({ ...prev, [role]: { x: remote.x!, y: remote.y! } }));
-            if (remote.direction) {
-              directionsRef.current = { ...directionsRef.current, [role]: remote.direction };
-              setDirections((d) => ({ ...d, [role]: remote.direction! }));
-            }
-            if (remote.actionAtMs) {
-              lastRemoteActionAt.current[role] = remote.actionAtMs;
-            }
-            if (remote.speechAtMs && Date.now() - remote.speechAtMs >= 10000) {
-              lastRemoteSpeechAt.current[role] = remote.speechAtMs;
-            }
-          } else if (dist > 0.5) {
-            if (remote.actionAtMs) {
-              lastRemoteActionAt.current[role] = remote.actionAtMs;
-            }
-            animateCharacterTo(
-              role,
-              { x: remote.x, y: remote.y },
-              moveMood,
-              endMood,
-              undefined,
-              3800,
-              remote.direction
-            );
-          } else {
-            if (remote.direction) {
-              directionsRef.current = { ...directionsRef.current, [role]: remote.direction };
-              setDirections((d) => ({ ...d, [role]: remote.direction! }));
-            }
-            if (remote.actionAtMs && remote.actionAtMs > lastRemoteActionAt.current[role]) {
-              lastRemoteActionAt.current[role] = remote.actionAtMs;
-              setTemporaryMood(role, endMood !== "idle" ? endMood : "happy", 3400);
-              triggerHeartBurst(remote.x, remote.y - 12);
-            }
+        if (isFirst || mapChanged) {
+          positionsRef.current = { ...positionsRef.current, [role]: { x: remote.x, y: remote.y } };
+          setPositions((prev) => ({ ...prev, [role]: { x: remote.x!, y: remote.y! } }));
+          if (remote.direction) {
+            directionsRef.current = { ...directionsRef.current, [role]: remote.direction };
+            setDirections((d) => ({ ...d, [role]: remote.direction! }));
+          }
+          setMood((prev) => ({ ...prev, [role]: endMood }));
+          if (remote.actionAtMs) lastRemoteActionAt.current[role] = remote.actionAtMs;
+          if (remote.speechAtMs && Date.now() - remote.speechAtMs >= 10000) {
+            lastRemoteSpeechAt.current[role] = remote.speechAtMs;
+          }
+        } else if (dist > 0.5) {
+          if (remote.actionAtMs) {
+            lastRemoteActionAt.current[role] = remote.actionAtMs;
+          }
+          animateCharacterTo(
+            role,
+            { x: remote.x, y: remote.y },
+            moveMood,
+            endMood,
+            undefined,
+            4000,
+            remote.direction
+          );
+        } else {
+          if (remote.direction) {
+            directionsRef.current = { ...directionsRef.current, [role]: remote.direction };
+            setDirections((d) => ({ ...d, [role]: remote.direction! }));
+          }
+          if (remote.actionAtMs && remote.actionAtMs > lastRemoteActionAt.current[role]) {
+            lastRemoteActionAt.current[role] = remote.actionAtMs;
+            setTemporaryMood(role, endMood !== "idle" ? endMood : "happy", 3400);
+            triggerHeartBurst(remote.x, remote.y - 12);
           }
         }
+      }
 
-        if (
-          remote.speechText &&
-          remote.speechAtMs &&
-          remote.speechAtMs > lastRemoteSpeechAt.current[role] &&
-          Date.now() - remote.speechAtMs < 15000
-        ) {
-          lastRemoteSpeechAt.current[role] = remote.speechAtMs;
-          const speechMood: PetMood = endMood !== "idle" ? endMood : "happy";
-          setTemporaryMood(role, speechMood, 4200, remote.speechText);
-          triggerHeartBurst(
-            remote.x ?? positionsRef.current[role].x,
-            (remote.y ?? positionsRef.current[role].y) - 12
-          );
-        }
+      if (
+        remote.speechText &&
+        remote.speechAtMs &&
+        remote.speechAtMs > lastRemoteSpeechAt.current[role] &&
+        Date.now() - remote.speechAtMs < 15000
+      ) {
+        lastRemoteSpeechAt.current[role] = remote.speechAtMs;
+        const speechMood: PetMood = endMood !== "idle" ? endMood : "happy";
+        setTemporaryMood(role, speechMood, 4500, remote.speechText);
+        triggerHeartBurst(
+          remote.x ?? positionsRef.current[role].x,
+          (remote.y ?? positionsRef.current[role].y) - 12
+        );
       }
       setSyncState("synced");
     };
@@ -1469,80 +1744,106 @@ export default function CharacterWorld({
     window.setTimeout(() => setOwnershipNotice(""), 2600);
   };
 
-  // Switch my character's map (Garden <-> Belle's House <-> Partner's House)
+  const mapLabel = (m: WorldMapId) => {
+    if (m === "flower_forest") return t.mapFlowerForest;
+    if (m === "starlight_pond") return t.mapStarlightPond;
+    if (m === "belle_house") return t.mapBelleHouse;
+    if (m === "partner_house") return t.mapPartnerHouse;
+    return t.mapGarden;
+  };
+
+  // Switch my character's map (5 Fixed Maps with smooth transition banner)
   const changeMyMap = (targetMap: WorldMapId, spawnPoint?: Point2D) => {
     if (portalTimerRef.current) {
       window.clearTimeout(portalTimerRef.current);
       portalTimerRef.current = null;
     }
+    setContextMenu(null);
     const prevMap = mapsRef.current[currentRole];
-    const defaultSpawn: Point2D =
-      targetMap === "garden"
-        ? prevMap === "belle_house"
-          ? { x: 18, y: 54 }
-          : prevMap === "partner_house"
-            ? { x: 82, y: 54 }
-            : { x: 50, y: 68 }
-        : { x: 48, y: 76 };
+    let defaultSpawn: Point2D = { x: 50, y: 68 };
+
+    if (targetMap === "garden") {
+      if (prevMap === "belle_house") defaultSpawn = { x: 22, y: 56 };
+      else if (prevMap === "partner_house") defaultSpawn = { x: 78, y: 56 };
+      else if (prevMap === "flower_forest") defaultSpawn = { x: 18, y: 66 };
+      else if (prevMap === "starlight_pond") defaultSpawn = { x: 82, y: 66 };
+    } else if (targetMap === "flower_forest") {
+      defaultSpawn = prevMap === "garden" ? { x: 80, y: 66 } : { x: 50, y: 68 };
+    } else if (targetMap === "starlight_pond") {
+      defaultSpawn = prevMap === "garden" ? { x: 20, y: 66 } : { x: 46, y: 68 };
+    } else {
+      defaultSpawn = { x: 50, y: 76 };
+    }
 
     const nextPos = spawnPoint || defaultSpawn;
+    const nextDir: 1 | -1 =
+      targetMap === "flower_forest" ? -1 : targetMap === "starlight_pond" ? 1 : directionsRef.current[currentRole];
+
     mapsRef.current = { ...mapsRef.current, [currentRole]: targetMap };
     positionsRef.current = { ...positionsRef.current, [currentRole]: nextPos };
+    directionsRef.current = { ...directionsRef.current, [currentRole]: nextDir };
     activeSpotsRef.current = { ...activeSpotsRef.current, [currentRole]: null };
     setMaps((prev) => ({ ...prev, [currentRole]: targetMap }));
     setPositions((prev) => ({ ...prev, [currentRole]: nextPos }));
+    setDirections((prev) => ({ ...prev, [currentRole]: nextDir }));
     setActiveSpots((prev) => ({ ...prev, [currentRole]: null }));
-    setCameraMode("follow");
-    setTemporaryMood(currentRole, "happy", 1600);
+    setTemporaryMood(currentRole, "happy", 1500);
+
+    setMapTransitionBanner(mapLabel(targetMap));
+    window.setTimeout(() => setMapTransitionBanner(""), 1800);
+
     void syncMyStateToCloud({
       currentMap: targetMap,
       x: nextPos.x,
       y: nextPos.y,
+      direction: nextDir,
       activeSpotId: null,
       liveMood: "happy",
       actionAtMs: Date.now()
     });
   };
 
-  const handlePortalToHouse = (e: React.MouseEvent, targetHouse: "belle_house" | "partner_house") => {
-    e.stopPropagation();
-    const doorPos: Point2D = targetHouse === "belle_house" ? { x: 17, y: 50 } : { x: 83, y: 50 };
-    const durationSec = moveMyCharacterTo(doorPos, "walk", "happy", undefined, 2200, null);
+  // Walk to portal/door/signpost first, then transition to the next fixed map
+  const walkAndTransitionToMap = (
+    e: React.MouseEvent | undefined,
+    walkTarget: Point2D,
+    targetMap: WorldMapId,
+    spawnInTarget: Point2D
+  ) => {
+    e?.stopPropagation();
+    setContextMenu(null);
+    const durationSec = moveMyCharacterTo(walkTarget, "walk", "happy", undefined, 1800, null);
     if (portalTimerRef.current) window.clearTimeout(portalTimerRef.current);
     portalTimerRef.current = window.setTimeout(() => {
-      changeMyMap(targetHouse, { x: 48, y: 76 });
-    }, Math.min(950, durationSec * 850));
+      changeMyMap(targetMap, spawnInTarget);
+    }, Math.min(820, durationSec * 750));
   };
 
-  const handleExitRoomToGarden = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const matPos: Point2D = { x: 50, y: 81 };
-    const durationSec = moveMyCharacterTo(matPos, "walk", "happy", undefined, 2000, null);
-    if (portalTimerRef.current) window.clearTimeout(portalTimerRef.current);
-    portalTimerRef.current = window.setTimeout(() => {
-      const outsideDoor: Point2D = currentMap === "belle_house" ? { x: 18, y: 55 } : { x: 82, y: 55 };
-      changeMyMap("garden", outsideDoor);
-    }, Math.min(900, durationSec * 820));
-  };
-
-  // Phase 2: Unified Interactive Spot Handler for Garden (6 spots) & Wide Houses (3 spots)
+  // Unified Interactive Spot Handler across all 5 Fixed Maps (+ Affection EXP!)
   const handleInteractiveSpotClick = async (e: React.MouseEvent, spotId: InteractiveSpotId) => {
     e.stopPropagation();
+    setContextMenu(null);
     const isBelle = currentRole === "belle";
 
     if (spotId === "garden_bench") {
-      const seat: Point2D = isBelle ? { x: 47, y: 49 } : { x: 53, y: 49 };
-      const faceDir: 1 | -1 = isBelle ? 1 : -1;
-      moveMyCharacterTo(seat, "walk", "happy", t.benchReaction, 5500, "garden_bench", faceDir);
-      triggerHeartBurst(50, 42, "🍃");
+      const seat: Point2D = isBelle ? { x: 46, y: 49 } : { x: 54, y: 49 };
+      moveMyCharacterTo(seat, "walk", "happy", t.benchReaction, 5500, "garden_bench", isBelle ? 1 : -1);
+      await addAffectionExp(10, t.spotBenchLabel, { x: 50, y: 40 }, "🍃");
       return;
     }
 
     if (spotId === "campfire") {
-      const seat: Point2D = isBelle ? { x: 43, y: 75 } : { x: 57, y: 75 };
-      const faceDir: 1 | -1 = isBelle ? 1 : -1;
+      const seat: Point2D = isBelle ? { x: 42, y: 75 } : { x: 58, y: 75 };
       const nextLit = activeSpots[currentRole] === "campfire" ? !worldProps.campfireLit : true;
-      const nextProps: WorldEnvironmentProps = { ...worldProps, campfireLit: nextLit };
+      const cur = worldPropsRef.current;
+      const nextProps: WorldEnvironmentProps = {
+        ...cur,
+        campfireLit: nextLit,
+        affectionExp: (cur.affectionExp || 120) + 12,
+        interactionCount: (cur.interactionCount || 8) + 1,
+        lastInteractionText: `${t.spotCampfireLabel} (+12 ♥)`,
+        lastInteractionAtMs: Date.now()
+      };
       persistWorldPropsLocal(nextProps);
       moveMyCharacterTo(
         seat,
@@ -1551,47 +1852,48 @@ export default function CharacterWorld({
         nextLit ? t.campfireOnReaction : t.campfireOffReaction,
         5500,
         "campfire",
-        faceDir
+        isBelle ? 1 : -1
       );
-      triggerHeartBurst(50, 68, nextLit ? "🔥" : "🧺");
+      triggerHeartBurst(50, 66, nextLit ? "🔥" : "🧺", "+12 ♥");
       await syncWorldStateToCloud({ worldProps: nextProps });
       return;
     }
 
     if (spotId === "couple_tree") {
-      const slot: Point2D = isBelle ? { x: 29, y: 50 } : { x: 37, y: 50 };
-      const faceDir: 1 | -1 = isBelle ? 1 : -1;
+      const slot: Point2D = isBelle ? { x: 43, y: 54 } : { x: 57, y: 54 };
       const nowMs = Date.now();
-      const nextExp = (worldProps.coupleTreeExp || 0) + 1;
+      const cur = worldPropsRef.current;
+      const nextExp = (cur.coupleTreeExp || 0) + 1;
       const nextProps: WorldEnvironmentProps = {
-        ...worldProps,
+        ...cur,
         coupleTreeExp: nextExp,
         lastWateredBy: currentRole,
-        petalShowerAtMs: nowMs
+        petalShowerAtMs: nowMs,
+        affectionExp: (cur.affectionExp || 120) + 18,
+        interactionCount: (cur.interactionCount || 8) + 1,
+        lastInteractionText: `${t.spotTreeLabel} 💧 (+18 ♥)`,
+        lastInteractionAtMs: nowMs
       };
       lastProcessedPetalMs.current = nowMs;
       persistWorldPropsLocal(nextProps);
       triggerPetalShower();
-      moveMyCharacterTo(slot, "walk", "love", t.treeWaterReaction, 5200, "couple_tree", faceDir);
-      triggerHeartBurst(33, 39, "🌸");
+      moveMyCharacterTo(slot, "walk", "love", t.treeWaterReaction, 5200, "couple_tree", isBelle ? 1 : -1);
+      triggerHeartBurst(50, 40, "🌸", "+18 ♥");
       await syncWorldStateToCloud({ worldProps: nextProps });
       return;
     }
 
-    if (spotId === "sparkle_pond") {
-      const slot: Point2D = isBelle ? { x: 68, y: 73 } : { x: 80, y: 73 };
-      const faceDir: 1 | -1 = isBelle ? 1 : -1;
-      setPondSplashActive(true);
-      window.setTimeout(() => setPondSplashActive(false), 3200);
-      moveMyCharacterTo(slot, "walk", "jump", t.pondReaction, 4500, "sparkle_pond", faceDir);
-      triggerHeartBurst(74, 66, "🐠");
+    if (spotId === "flower_picnic") {
+      const slot: Point2D = isBelle ? { x: 66, y: 74 } : { x: 78, y: 74 };
+      moveMyCharacterTo(slot, "walk", "snack", t.picnicReaction, 5200, "flower_picnic", isBelle ? 1 : -1);
+      await addAffectionExp(14, t.spotPicnicLabel, { x: 72, y: 65 }, "🧺");
       return;
     }
 
     if (spotId === "wish_mailbox") {
-      const slot: Point2D = isBelle ? { x: 23, y: 56 } : { x: 28, y: 56 };
+      const slot: Point2D = isBelle ? { x: 22, y: 62 } : { x: 30, y: 62 };
       moveMyCharacterTo(slot, "walk", "happy", t.mailboxReaction, 4200, "wish_mailbox", 1);
-      triggerHeartBurst(25, 46, "💌");
+      triggerHeartBurst(24, 50, "💌");
       if (gardenGift) {
         setGiftOpenView(true);
       } else {
@@ -1600,44 +1902,80 @@ export default function CharacterWorld({
       return;
     }
 
+    if (spotId === "sparkle_pond") {
+      const slot: Point2D = isBelle ? { x: 52, y: 72 } : { x: 72, y: 72 };
+      setPondSplashActive(true);
+      window.setTimeout(() => setPondSplashActive(false), 3200);
+      moveMyCharacterTo(slot, "walk", "jump", t.pondReaction, 4500, "sparkle_pond", isBelle ? 1 : -1);
+      await addAffectionExp(12, t.spotPondLabel, { x: 62, y: 62 }, "🐠");
+      return;
+    }
+
     if (spotId === "star_observatory") {
-      const slot: Point2D = isBelle ? { x: 63, y: 46 } : { x: 70, y: 46 };
+      const slot: Point2D = isBelle ? { x: 65, y: 49 } : { x: 75, y: 49 };
       const nowMs = Date.now();
+      const cur = worldPropsRef.current;
       const nextProps: WorldEnvironmentProps = {
-        ...worldProps,
-        meteorShowerAtMs: nowMs
+        ...cur,
+        meteorShowerAtMs: nowMs,
+        affectionExp: (cur.affectionExp || 120) + 16,
+        interactionCount: (cur.interactionCount || 8) + 1,
+        lastInteractionText: `${t.spotStarLabel} 🌠 (+16 ♥)`,
+        lastInteractionAtMs: nowMs
       };
       lastProcessedMeteorMs.current = nowMs;
       persistWorldPropsLocal(nextProps);
       triggerMeteorShower();
       moveMyCharacterTo(slot, "walk", "love", t.starReaction, 5200, "star_observatory", 1);
-      triggerHeartBurst(66, 36, "🌠");
+      triggerHeartBurst(70, 36, "🌠", "+16 ♥");
       await syncWorldStateToCloud({ worldProps: nextProps });
       return;
     }
 
-    // Wide House Interior Spots (2-player separated slots!)
+    if (spotId === "forest_swing") {
+      const slot: Point2D = isBelle ? { x: 28, y: 56 } : { x: 36, y: 56 };
+      moveMyCharacterTo(slot, "walk", "happy", t.swingReaction, 5000, "forest_swing", isBelle ? 1 : -1);
+      await addAffectionExp(14, t.spotSwingLabel, { x: 32, y: 46 }, "🎶");
+      return;
+    }
+
     if (spotId === "bed") {
-      const pillowSlot: Point2D = isBelle ? { x: 67, y: 56 } : { x: 76, y: 56 };
-      const faceDir: 1 | -1 = isBelle ? 1 : -1;
-      moveMyCharacterTo(pillowSlot, "walk", "sleep", t.bedReaction, 6200, "bed", faceDir);
-      triggerHeartBurst(pillowSlot.x, pillowSlot.y - 10, "💤");
+      const pillowSlot: Point2D = isBelle ? { x: 69, y: 56 } : { x: 79, y: 56 };
+      moveMyCharacterTo(pillowSlot, "walk", "sleep", t.bedReaction, 6500, "bed", isBelle ? 1 : -1);
+      await addAffectionExp(12, t.spotBedLabel, { x: 74, y: 46 }, "💤");
       return;
     }
 
     if (spotId === "tea_table") {
-      const chairSlot: Point2D = isBelle ? { x: 20, y: 61 } : { x: 30, y: 61 };
-      const faceDir: 1 | -1 = isBelle ? 1 : -1;
-      moveMyCharacterTo(chairSlot, "walk", "snack", t.tableReaction, 5200, "tea_table", faceDir);
-      triggerHeartBurst(25, 51, "🍓");
+      const chairSlot: Point2D = isBelle ? { x: 19, y: 62 } : { x: 30, y: 62 };
+      moveMyCharacterTo(chairSlot, "walk", "snack", t.tableReaction, 5200, "tea_table", isBelle ? 1 : -1);
+      await addAffectionExp(12, t.spotTableLabel, { x: 24, y: 50 }, "🍓");
       return;
     }
 
     if (spotId === "cozy_rug") {
-      const rugSlot: Point2D = isBelle ? { x: 44, y: 68 } : { x: 53, y: 68 };
-      const faceDir: 1 | -1 = isBelle ? 1 : -1;
-      moveMyCharacterTo(rugSlot, "walk", "love", t.rugReaction, 5000, "cozy_rug", faceDir);
-      triggerHeartBurst(48, 60, "🧶");
+      const rugSlot: Point2D = isBelle ? { x: 45, y: 69 } : { x: 55, y: 69 };
+      moveMyCharacterTo(rugSlot, "walk", "love", t.rugReaction, 5000, "cozy_rug", isBelle ? 1 : -1);
+      await addAffectionExp(12, t.spotRugLabel, { x: 50, y: 60 }, "🧶");
+      return;
+    }
+
+    if (spotId === "jukebox") {
+      const slot: Point2D = isBelle ? { x: 41, y: 52 } : { x: 51, y: 52 };
+      const cur = worldPropsRef.current;
+      const nextPlay = !cur.jukeboxPlaying;
+      const nextProps: WorldEnvironmentProps = {
+        ...cur,
+        jukeboxPlaying: nextPlay,
+        affectionExp: (cur.affectionExp || 120) + 12,
+        interactionCount: (cur.interactionCount || 8) + 1,
+        lastInteractionText: `${t.spotJukeboxLabel} 🎵 (+12 ♥)`,
+        lastInteractionAtMs: Date.now()
+      };
+      persistWorldPropsLocal(nextProps);
+      moveMyCharacterTo(slot, "walk", "happy", t.jukeboxReaction, 5000, "jukebox", isBelle ? 1 : -1);
+      triggerHeartBurst(46, 40, "🎵", "+12 ♥");
+      await syncWorldStateToCloud({ worldProps: nextProps });
     }
   };
 
@@ -1647,54 +1985,98 @@ export default function CharacterWorld({
     await syncWorldStateToCloud({ decorations: nextDecors });
   };
 
-  // Phase 1: Stage Pointer Down / Move / Up for seamless Drag-to-Pan + Tap-to-Move
-  const handleStagePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button")) {
-      dragStateRef.current.pointerDown = false;
-      return;
+  // Open Context Menu (Right-click on PC / Long-press on Mobile)
+  const openStageContextMenu = (
+    targetType: "me" | "partner" | "ground",
+    clientX: number,
+    clientY: number
+  ) => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
+    const stageX = clamp(Math.round(((clientX - rect.left) / rect.width) * 100), 12, 88);
+    const stageY = clamp(Math.round(((clientY - rect.top) / rect.height) * 100), 46, 85);
+    setContextMenu({
+      targetType,
+      clientX,
+      clientY,
+      stageX,
+      stageY
+    });
+  };
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
     }
-    dragStateRef.current = {
-      pointerDown: true,
-      moved: false,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startPanPct: activeCameraPanX
-    };
+  };
+
+  const startLongPress = (
+    targetType: "me" | "partner" | "ground",
+    clientX: number,
+    clientY: number
+  ) => {
+    clearLongPressTimer();
+    longPressTriggeredRef.current = false;
+    pointerDownPosRef.current = { x: clientX, y: clientY };
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      openStageContextMenu(targetType, clientX, clientY);
+    }, 430);
+  };
+
+  const handleStagePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button === 2) return; // right click handled by onContextMenu
+    if ((event.target as HTMLElement).closest(".stage-hud-ignore")) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    startLongPress("ground", event.clientX, event.clientY);
   };
 
   const handleStagePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStateRef.current.pointerDown) return;
-    const dx = event.clientX - dragStateRef.current.startClientX;
-    const dy = event.clientY - dragStateRef.current.startClientY;
-
-    if (!dragStateRef.current.moved && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 0.8) {
-      dragStateRef.current.moved = true;
-      setIsDraggingStage(true);
-      setCameraMode("free");
-    }
-
-    if (dragStateRef.current.moved && canvasRef.current) {
-      const canvasWidthPx = canvasRef.current.getBoundingClientRect().width || 800;
-      const deltaPct = (dx / canvasWidthPx) * 100;
-      setManualPanX(clamp(dragStateRef.current.startPanPct + deltaPct, minCameraPanPct, 0));
+    if (!longPressTimerRef.current) return;
+    const dist = Math.hypot(
+      event.clientX - pointerDownPosRef.current.x,
+      event.clientY - pointerDownPosRef.current.y
+    );
+    if (dist > 10) {
+      clearLongPressTimer();
     }
   };
 
   const handleStagePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStateRef.current.pointerDown) return;
-    const wasMoved = dragStateRef.current.moved;
-    dragStateRef.current.pointerDown = false;
-    dragStateRef.current.moved = false;
-    setIsDraggingStage(false);
-
-    if (wasMoved) return;
+    clearLongPressTimer();
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    if (event.button === 2) return;
+    if ((event.target as HTMLElement).closest(".stage-hud-ignore")) return;
     if ((event.target as HTMLElement).closest("button")) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    if (contextMenu) {
+      setContextMenu(null);
+      return;
+    }
+
+    const stage = stageRef.current;
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
     const rawX = ((event.clientX - rect.left) / rect.width) * 100;
     const rawY = ((event.clientY - rect.top) / rect.height) * 100;
+
+    // Walking to the bottom exit mat inside a house exits back to the garden
+    if (!decorating && (currentMap === "belle_house" || currentMap === "partner_house")) {
+      if (rawY >= 81 && rawX >= 36 && rawX <= 64) {
+        walkAndTransitionToMap(
+          undefined,
+          { x: 50, y: 81 },
+          "garden",
+          currentMap === "belle_house" ? { x: 20, y: 55 } : { x: 80, y: 55 }
+        );
+        return;
+      }
+    }
 
     const { x: targetX, y: targetY } = resolveWalkableTarget(rawX, rawY, currentMap);
 
@@ -1707,22 +2089,14 @@ export default function CharacterWorld({
         y: targetY,
         placedBy: currentRole
       };
-      const next = [...decorations.slice(-17), newDecor];
+      const next = [...decorations.slice(-19), newDecor];
       void saveDecorationsToCloud(next);
       triggerHeartBurst(targetX, targetY - 6, "✨");
       return;
     }
 
     setTapTarget({ x: targetX, y: targetY, key: Date.now() });
-    // Strict single-character control: ONLY move currentRole!
     moveMyCharacterTo({ x: targetX, y: targetY }, "walk", "idle", undefined, 3200, null);
-  };
-
-  const handleMinimapClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const clickX = clamp(Math.round(((event.clientX - rect.left) / rect.width) * 100), 10, 90);
-    setCameraMode("free");
-    setManualPanX(computeCameraPanForX(clickX));
   };
 
   const handleDecorationClick = (e: React.MouseEvent, item: PlacedDecoration) => {
@@ -1733,7 +2107,7 @@ export default function CharacterWorld({
       return;
     }
     moveMyCharacterTo(
-      { x: clamp(item.x + (currentRole === "belle" ? -5 : 5), 12, 88), y: clamp(item.y + 2, 48, 85) },
+      { x: clamp(item.x + (currentRole === "belle" ? -5 : 5), 14, 86), y: clamp(item.y + 2, 48, 84) },
       "walk",
       "happy",
       "✿",
@@ -1744,11 +2118,15 @@ export default function CharacterWorld({
 
   const handlePetCharacter = (event: React.MouseEvent, role: Role) => {
     event.stopPropagation();
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
     const pos = positions[role];
-    triggerHeartBurst(pos.x, pos.y - 12);
     if (role === currentRole) {
       const nowMs = Date.now();
       setTemporaryMood(currentRole, "love", 2600, t.pettedReaction);
+      void addAffectionExp(5, t.coopPet, { x: pos.x, y: pos.y - 12 }, "♡");
       void syncMyStateToCloud({
         liveMood: "love",
         speechText: t.pettedReaction,
@@ -1756,13 +2134,13 @@ export default function CharacterWorld({
         actionAtMs: nowMs
       });
     } else {
-      // Walk up to partner and pet them affectionately on both screens in real time!
       void triggerCoopInteraction("pet");
     }
   };
 
-  // Real-time Co-op Action when both characters meet
+  // Real-time Co-op Action + Affection Level Up!
   const triggerCoopInteraction = async (type: CoopActionType) => {
+    setContextMenu(null);
     const myPos = positions[currentRole];
     const otherPos = positions[otherRole];
     const sameMap = maps[currentRole] === maps[otherRole];
@@ -1770,39 +2148,92 @@ export default function CharacterWorld({
     const centerX = sameMap ? Math.round((myPos.x + otherPos.x) / 2) : myPos.x;
     const centerY = sameMap ? Math.round((myPos.y + otherPos.y) / 2) : myPos.y;
 
+    const gainMap: Record<CoopActionType, number> = {
+      pet: 10,
+      hug: 20,
+      kiss: 20,
+      feed: 15,
+      flower: 15,
+      dance: 20,
+      jump: 15,
+      highfive: 15,
+      photo: 25,
+      nap: 20
+    };
+    const labelMap: Record<CoopActionType, string> = {
+      pet: t.coopPet,
+      hug: t.coopHug,
+      kiss: t.coopKiss,
+      feed: t.coopFeed,
+      flower: t.coopFlower,
+      dance: t.coopDance,
+      jump: t.coopJump,
+      highfive: t.coopHighfive,
+      photo: t.coopPhoto,
+      nap: t.coopNap
+    };
+
+    const gain = gainMap[type] || 15;
     const evt: CoopEventPayload = {
       id: `${Date.now()}-${currentRole}`,
       type,
       fromRole: currentRole,
       mapId: currentMap,
-      centerX: clamp(centerX, 22, 78),
+      centerX: clamp(centerX, 24, 76),
       centerY: clamp(centerY, 52, 80),
+      affectionGain: gain,
       createdAtMs: Date.now()
     };
 
     lastProcessedCoopId.current = evt.id;
-    setCameraMode("follow");
     executeCoopEventLocally(evt);
 
-    const myNewX = currentRole === "belle" ? clamp(evt.centerX - 6, 14, 82) : clamp(evt.centerX + 6, 18, 86);
-    const myNewY = currentRole === "belle" ? evt.centerY : clamp(evt.centerY + 1, 48, 84);
+    const myNewX = currentRole === "belle" ? clamp(evt.centerX - 7, 16, 82) : clamp(evt.centerX + 7, 18, 84);
+    const myNewY = currentRole === "belle" ? evt.centerY : clamp(evt.centerY + 1, 50, 82);
+
+    const nextMood: PetMood =
+      type === "feed"
+        ? "snack"
+        : type === "nap"
+          ? "sleep"
+          : type === "jump" || type === "dance" || type === "highfive"
+            ? "jump"
+            : "love";
 
     void syncMyStateToCloud({
       x: myNewX,
       y: myNewY,
       direction: currentRole === "belle" ? 1 : -1,
       activeSpotId: null,
-      liveMood: type === "feed" ? "snack" : type === "nap" ? "sleep" : type === "jump" ? "jump" : "love",
+      liveMood: nextMood,
       actionAtMs: Date.now()
     });
 
-    await syncWorldStateToCloud({ coopEvent: evt });
+    const cur = worldPropsRef.current;
+    const nextProps: WorldEnvironmentProps = {
+      ...cur,
+      affectionExp: (cur.affectionExp || 120) + gain,
+      interactionCount: (cur.interactionCount || 8) + 1,
+      lastInteractionText: `${labelMap[type]} (+${gain} ♥)`,
+      lastInteractionAtMs: Date.now()
+    };
+    persistWorldPropsLocal(nextProps);
+
+    await syncWorldStateToCloud({ coopEvent: evt, worldProps: nextProps });
   };
 
   const handleApproachPartner = () => {
+    setContextMenu(null);
+    if (maps[otherRole] !== currentMap) {
+      changeMyMap(maps[otherRole], {
+        x: clamp(positions[otherRole].x + (currentRole === "belle" ? -9 : 9), 18, 82),
+        y: clamp(positions[otherRole].y, 52, 82)
+      });
+      return;
+    }
     const otherPos = positions[otherRole];
     const target: Point2D = {
-      x: clamp(otherPos.x + (currentRole === "belle" ? -8 : 8), 12, 88),
+      x: clamp(otherPos.x + (currentRole === "belle" ? -8 : 8), 14, 86),
       y: clamp(otherPos.y, 48, 84)
     };
     moveMyCharacterTo(target, "walk", "happy", "♡", 2600, activeSpots[otherRole]);
@@ -1813,10 +2244,11 @@ export default function CharacterWorld({
     const clean = (textToUse ?? speechDraft).trim();
     if (!clean) return;
     setSpeechDraft("");
+    setContextMenu(null);
     const pos = positions[currentRole];
     const nowMs = Date.now();
-    triggerHeartBurst(pos.x, pos.y - 14);
     setTemporaryMood(currentRole, "happy", 4500, clean);
+    void addAffectionExp(5, clean, { x: pos.x, y: pos.y - 14 }, "💬");
     void syncMyStateToCloud({
       liveMood: "happy",
       speechText: clean,
@@ -1826,17 +2258,10 @@ export default function CharacterWorld({
   };
 
   const openMyEditor = () => {
+    setContextMenu(null);
     setDraft(profiles[currentRole]);
     setPhotoError("");
     setEditing(true);
-  };
-
-  const handleProfileCardClick = (role: Role) => {
-    if (role !== currentRole) {
-      showOwnershipToast();
-      return;
-    }
-    openMyEditor();
   };
 
   const quickSwitchBelleSpecies = async (species: BelleSpecies) => {
@@ -1851,7 +2276,7 @@ export default function CharacterWorld({
     };
     const next = { ...profiles, belle: updatedBelle };
     persistLocal(next);
-    triggerHeartBurst(positions.belle.x, positions.belle.y - 10);
+    triggerHeartBurst(positions.belle.x, positions.belle.y - 10, "✨");
     setTemporaryMood("belle", "jump", 1800);
     if (editing) {
       setDraft((prev) => ({ ...prev, species }));
@@ -1869,17 +2294,27 @@ export default function CharacterWorld({
       fromRole: currentRole,
       fromName: profiles[currentRole].name,
       mapId: currentMap,
-      x: clamp(pos.x + (currentRole === "belle" ? 5 : -5), 16, 84),
-      y: clamp(pos.y + 3, 50, 84),
+      x: clamp(pos.x + (currentRole === "belle" ? 5 : -5), 18, 82),
+      y: clamp(pos.y + 3, 52, 82),
       createdAtMs: Date.now()
     };
     setGardenGift(newGift);
     localStorage.setItem(GARDEN_GIFT_STORAGE_KEY, JSON.stringify(newGift));
     setGiftModalOpen(false);
     setGiftTextDraft("");
-    triggerHeartBurst(newGift.x, newGift.y - 6);
 
-    await syncWorldStateToCloud({ giftNote: newGift });
+    const cur = worldPropsRef.current;
+    const nextProps: WorldEnvironmentProps = {
+      ...cur,
+      affectionExp: (cur.affectionExp || 120) + 20,
+      interactionCount: (cur.interactionCount || 8) + 1,
+      lastInteractionText: `${t.leaveGift} (+20 ♥)`,
+      lastInteractionAtMs: Date.now()
+    };
+    persistWorldPropsLocal(nextProps);
+    triggerHeartBurst(newGift.x, newGift.y - 6, "🎁", "+20 ♥");
+
+    await syncWorldStateToCloud({ giftNote: newGift, worldProps: nextProps });
   };
 
   const handleRemoveGift = async () => {
@@ -1936,14 +2371,6 @@ export default function CharacterWorld({
   };
 
   const statusText = syncState === "synced" ? t.synced : syncState === "waiting" ? t.syncWait : t.local;
-  const profileList = useMemo(() => [profiles.belle, profiles.partner], [profiles]);
-
-  const isSameMap = maps.belle === maps.partner;
-  const distanceBetweenPets = useMemo(
-    () => Math.hypot(positions.belle.x - positions.partner.x, positions.belle.y - positions.partner.y),
-    [positions.belle.x, positions.belle.y, positions.partner.x, positions.partner.y]
-  );
-  const isCloseTogether = isSameMap && distanceBetweenPets <= 22;
 
   const isOtherOnline = useMemo(() => {
     const last = profiles[otherRole].lastActiveMs;
@@ -1951,31 +2378,31 @@ export default function CharacterWorld({
     return Date.now() - last < 5 * 60 * 1000;
   }, [profiles, otherRole]);
 
-  const mapLabel = (m: WorldMapId) =>
-    m === "garden" ? t.mapGarden : m === "belle_house" ? t.mapBelleHouse : t.mapPartnerHouse;
-
   const currentMapDecors = useMemo(
     () => decorations.filter((d) => d.mapId === currentMap),
     [decorations, currentMap]
   );
 
   const stageBgImage =
-    currentMap === "garden"
-      ? characterAsset("garden-meadow-bg.webp")
-      : currentMap === "belle_house"
-        ? characterAsset("belle-room-bg.webp")
-        : characterAsset("partner-room-bg.webp");
+    currentMap === "belle_house"
+      ? characterAsset("belle-room-bg.webp")
+      : currentMap === "partner_house"
+        ? characterAsset("partner-room-bg.webp")
+        : characterAsset("garden-meadow-bg.webp");
 
   const treeStage = getCoupleTreeStage(worldProps.coupleTreeExp || 0);
+  const levelInfo = useMemo(
+    () => getCoupleLevelInfo(worldProps.affectionExp || 120, lang),
+    [worldProps.affectionExp, lang]
+  );
 
-  // Dynamic Y-Depth Sorting: boost zIndex when sitting on elevated furniture (bench/bed)
   const getDepthStyle = (role: Role): React.CSSProperties => {
     const pos = positions[role];
     const spot = activeSpots[role];
     const depthRatio = (pos.y - 44) / 44;
-    const depthScale = Number((0.84 + depthRatio * 0.22).toFixed(3));
+    const depthScale = Number((0.86 + depthRatio * 0.2).toFixed(3));
     const baseZ = Math.round(pos.y);
-    const zIndex = spot === "garden_bench" ? 54 : spot === "bed" ? 64 : baseZ;
+    const zIndex = spot === "garden_bench" ? 56 : spot === "bed" ? 66 : baseZ;
     return {
       left: `${pos.x}%`,
       top: `${pos.y}%`,
@@ -1985,98 +2412,58 @@ export default function CharacterWorld({
     } as React.CSSProperties;
   };
 
+  const renderMinimapPin = (targetMapId: WorldMapId) => {
+    const belleHere = maps.belle === targetMapId;
+    const partnerHere = maps.partner === targetMapId;
+    if (!belleHere && !partnerHere) return null;
+    return (
+      <span className="hud-minimap-node-avatars">
+        {belleHere && (
+          <i className={`mini-dot ${currentRole === "belle" ? "is-me" : ""}`}>
+            {profiles.belle.species === "rabbit" ? "🐰" : "🐱"}
+          </i>
+        )}
+        {partnerHere && (
+          <i className={`mini-dot ${currentRole === "partner" ? "is-me" : ""}`}>🐶</i>
+        )}
+      </span>
+    );
+  };
+
   return (
     <section className="character-world" aria-labelledby="character-world-title">
+      {/* Compact & Clean Header Row */}
       <div className="character-world-topbar">
-        <button type="button" className="character-back" onClick={onBack}>
-          <RotateCcw size={16} /> {t.back}
-        </button>
+        <div className="topbar-left-group">
+          <button type="button" className="character-back" onClick={onBack}>
+            <RotateCcw size={15} /> {t.back}
+          </button>
+          <div className="compact-world-title">
+            <h2 id="character-world-title">{t.title}</h2>
+            <span className={`character-sync ${syncState}`}>
+              <i /> {statusText}
+            </span>
+          </div>
+        </div>
 
         <div className="character-topbar-right">
-          <div className="garden-time-switcher" role="group" aria-label="Time of day">
-            <button
-              type="button"
-              className={timeMode === "auto" ? "active" : ""}
-              onClick={() => setTimeMode("auto")}
-            >
-              <Sparkles size={12} /> {t.timeAuto}
-            </button>
-            <button
-              type="button"
-              className={timeMode === "day" ? "active" : ""}
-              onClick={() => setTimeMode("day")}
-              aria-label={t.timeDay}
-            >
-              <Sun size={13} />
-            </button>
-            <button
-              type="button"
-              className={timeMode === "sunset" ? "active" : ""}
-              onClick={() => setTimeMode("sunset")}
-              aria-label={t.timeSunset}
-            >
-              <Sunset size={13} />
-            </button>
-            <button
-              type="button"
-              className={timeMode === "night" ? "active" : ""}
-              onClick={() => setTimeMode("night")}
-              aria-label={t.timeNight}
-            >
-              <Moon size={13} />
-            </button>
-          </div>
-          <span className={`character-sync ${syncState}`}><i /> {statusText}</span>
-        </div>
-      </div>
+          {/* Partner Live Status & Instant Follow Pill */}
+          <button
+            type="button"
+            className={`partner-location-pill ${isOtherOnline ? "online" : ""}`}
+            onClick={handleApproachPartner}
+          >
+            <span className="online-dot" />
+            <strong>{profiles[otherRole].name}</strong>
+            <span>· {mapLabel(maps[otherRole])}</span>
+            <em className="follow-link">
+              <Navigation size={11} /> {maps[otherRole] !== currentMap ? t.followPartner : t.approachPartnerBtn}
+            </em>
+          </button>
 
-      <div className="character-world-header-row">
-        <header className="character-world-heading">
-          <span>{t.eyebrow}</span>
-          <h2 id="character-world-title">{t.title}</h2>
-          <p>{t.subtitle}</p>
-        </header>
-
-        <div className="character-header-controls">
-          <div className="my-control-chip">
-            <img
-              src={
-                currentRole === "partner"
-                  ? characterAsset("partner-puppy.webp")
-                  : profiles.belle.species === "rabbit"
-                    ? characterAsset("belle-rabbit.webp")
-                    : characterAsset("belle-cat.webp")
-              }
-              alt=""
-            />
-            <div>
-              <small>{t.controllingLabel}</small>
-              <strong>{profiles[currentRole].name}</strong>
-            </div>
-          </div>
-
-          {currentRole === "belle" && (
-            <div className="belle-quick-switcher" role="group" aria-label={t.choose}>
-              <span className="belle-quick-label">{t.choose}</span>
-              <div className="belle-quick-buttons">
-                {(["cat", "rabbit"] as BelleSpecies[]).map((species) => {
-                  const active = profiles.belle.species === species;
-                  return (
-                    <button
-                      key={species}
-                      type="button"
-                      className={`belle-quick-btn ${active ? "active" : ""}`}
-                      onClick={() => void quickSwitchBelleSpecies(species)}
-                      aria-pressed={active}
-                    >
-                      <img src={characterAsset(`belle-${species}.webp`)} alt="" />
-                      <span>{species === "cat" ? t.cat : t.rabbit}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          <button type="button" className="character-profile-quick-btn" onClick={openMyEditor}>
+            <Pencil size={13} /> {t.editProfileBtn}
+          </button>
         </div>
       </div>
 
@@ -2086,375 +2473,249 @@ export default function CharacterWorld({
         </div>
       )}
 
-      {/* 3-Map Navigation Bar + Partner Live Location Tracker */}
-      <div className="world-map-nav-bar">
-        <div className="world-map-tabs" role="tablist" aria-label="World Maps">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={currentMap === "garden"}
-            className={`map-tab-btn ${currentMap === "garden" ? "active" : ""}`}
-            onClick={() => changeMyMap("garden")}
-          >
-            <Trees size={15} />
-            <span>{t.mapGarden}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={currentMap === "belle_house"}
-            className={`map-tab-btn ${currentMap === "belle_house" ? "active" : ""}`}
-            onClick={() => changeMyMap("belle_house")}
-          >
-            <Home size={15} />
-            <span>{t.mapBelleHouse}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={currentMap === "partner_house"}
-            className={`map-tab-btn ${currentMap === "partner_house" ? "active" : ""}`}
-            onClick={() => changeMyMap("partner_house")}
-          >
-            <Home size={15} />
-            <span>{t.mapPartnerHouse}</span>
-          </button>
-        </div>
-
-        {/* Partner Live Location & Follow Button */}
-        <button
-          type="button"
-          className={`partner-location-pill ${isOtherOnline ? "online" : ""}`}
-          onClick={() => {
-            if (maps[otherRole] !== currentMap) {
-              changeMyMap(maps[otherRole], {
-                x: clamp(positions[otherRole].x + (currentRole === "belle" ? -9 : 9), 16, 84),
-                y: clamp(positions[otherRole].y, 50, 82)
-              });
-            } else {
-              handleApproachPartner();
-            }
-          }}
-        >
-          <span className="online-dot" />
-          <strong>{profiles[otherRole].name}</strong>
-          <span>· {mapLabel(maps[otherRole])}</span>
-          <em className="follow-link">
-            <Navigation size={11} /> {maps[otherRole] !== currentMap ? t.followPartner : t.approachPartnerBtn}
-          </em>
-        </button>
-      </div>
-
-      {/* Phase 1: Top Panorama Mini-Map Radar & Camera Mode Bar */}
-      <div className="world-minimap-bar">
-        <div
-          className="minimap-radar-track"
-          onClick={handleMinimapClick}
-          role="slider"
-          aria-label="World Radar"
-          aria-valuenow={Math.round(positions[currentRole].x)}
-        >
-          <div className="minimap-zones">
-            <span>{currentMap === "garden" ? t.zoneGardenLeft : t.zoneHouseLeft}</span>
-            <span>{currentMap === "garden" ? t.zoneGardenCenter : t.zoneHouseCenter}</span>
-            <span>{currentMap === "garden" ? t.zoneGardenRight : t.zoneHouseRight}</span>
-          </div>
-
-          {/* Viewport lens indicator */}
-          <div
-            className="minimap-viewport-lens"
-            style={{
-              width: `${Math.round(100 / worldScaleX)}%`,
-              left: `${clamp(-activeCameraPanX, 0, 100 - 100 / worldScaleX)}%`
-            }}
-          />
-
-          {/* Belle live radar pin */}
-          {maps.belle === currentMap && (
-            <span
-              className="minimap-pin belle-pin"
-              style={{ left: `${positions.belle.x}%` }}
-              title={profiles.belle.name}
-            >
-              {profiles.belle.species === "rabbit" ? "🐰" : "🐱"}
-            </span>
-          )}
-
-          {/* Partner live radar pin */}
-          {maps.partner === currentMap && (
-            <span
-              className="minimap-pin partner-pin"
-              style={{ left: `${positions.partner.x}%` }}
-              title={profiles.partner.name}
-            >
-              🐶
-            </span>
-          )}
-        </div>
-
-        <button
-          type="button"
-          className={`camera-mode-pill mode-${cameraMode}`}
-          onClick={() => {
-            if (cameraMode === "follow" && maps[otherRole] === currentMap) {
-              setCameraMode("partner");
-            } else {
-              setCameraMode("follow");
-            }
-          }}
-        >
-          {cameraMode === "free"
-            ? t.cameraFreePan
-            : cameraMode === "partner"
-              ? t.cameraLookPartner
-              : t.cameraFollowMine}
-        </button>
-      </div>
-
-      {/* 2.5D Panorama Storybook Stage (Wide Garden 220% / Wide Cozy Houses 175%) */}
+      {/* =====================================================================
+          FIXED 100% VIEWPORT STAGE (No auto-scroll panning, bright & crisp!)
+          ===================================================================== */}
       <div
         ref={stageRef}
-        className={`character-stage map-${currentMap} theme-${timeOfDay} ${decorating ? "is-decorating" : ""} ${isDraggingStage ? "is-dragging" : ""}`}
+        className={`character-stage map-${currentMap} theme-${timeOfDay} ${decorating ? "is-decorating" : ""}`}
         onPointerDown={handleStagePointerDown}
         onPointerMove={handleStagePointerMove}
         onPointerUp={handleStagePointerUp}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          openStageContextMenu("ground", e.clientX, e.clientY);
+        }}
       >
         <div className="stage-lighting-overlay" aria-hidden="true" />
+        {cameraFlashActive && <div className="stage-camera-flash" aria-hidden="true" />}
 
-        {/* Sky Weather Overlays: Pink Petal Shower (Couple Tree) & Meteor Shower (Star Observatory) */}
-        {petalShowerActive && (
-          <div className="sky-petal-shower" aria-hidden="true">
-            {Array.from({ length: 14 }).map((_, idx) => (
-              <i key={idx} className={`petal p-${idx + 1}`}>🌸</i>
-            ))}
-          </div>
-        )}
-        {meteorShowerActive && (
-          <div className="sky-meteor-shower" aria-hidden="true">
-            <i className="meteor m-1">🌠</i>
-            <i className="meteor m-2">🌠</i>
-            <i className="meteor m-3">✨</i>
-            <i className="meteor m-4">🌠</i>
+        {/* Map Transition Banner */}
+        {mapTransitionBanner && (
+          <div className="map-transition-banner" role="status">
+            <MapPin size={14} /> {mapTransitionBanner}
           </div>
         )}
 
-        {/* Wide Scrollable World Camera Canvas */}
-        <div
-          ref={canvasRef}
-          className={`world-camera-canvas ${isDraggingStage ? "dragging" : ""}`}
-          style={{
-            width: `${worldScaleX * 100}%`,
-            backgroundImage: `url("${stageBgImage}")`,
-            transform: `translate3d(${activeCameraPanX}%, 0, 0)`
-          }}
+        {/* ===============================================================
+            TOP-LEFT MINIMAL HUD MINI-MAP (Compact 3-Space Pill + Optional Radar)
+            =============================================================== */}
+        <aside
+          className={`stage-hud-minimap stage-hud-ignore ${minimapExpanded ? "expanded" : "collapsed"}`}
+          onClick={(e) => e.stopPropagation()}
         >
-          {/* GARDEN MAP ELEMENTS: 2 Cottages + 6 Interactive Environment Spots */}
+          <div className="hud-minimap-bar">
+            <button
+              type="button"
+              className="hud-radar-toggle-btn"
+              onClick={() => setMinimapExpanded((prev) => !prev)}
+              title="미니맵 레이더 펼치기/접기"
+            >
+              <Compass size={13} />
+            </button>
+            <button
+              type="button"
+              className={`hud-map-node ${currentMap === "belle_house" ? "active" : ""}`}
+              onClick={() => changeMyMap("belle_house")}
+            >
+              <span>{t.shortBelleHouse}</span>
+              {renderMinimapPin("belle_house")}
+            </button>
+            <button
+              type="button"
+              className={`hud-map-node ${currentMap === "garden" ? "active" : ""}`}
+              onClick={() => changeMyMap("garden")}
+            >
+              <span>{t.shortGarden}</span>
+              {renderMinimapPin("garden")}
+            </button>
+            <button
+              type="button"
+              className={`hud-map-node ${currentMap === "partner_house" ? "active" : ""}`}
+              onClick={() => changeMyMap("partner_house")}
+            >
+              <span>{t.shortPartnerHouse}</span>
+              {renderMinimapPin("partner_house")}
+            </button>
+          </div>
+
+          {minimapExpanded && (
+            <div className="hud-minimap-body">
+              <div className="hud-live-radar" title="현재 공간 내 위치">
+                <span
+                  className="radar-dot me-dot"
+                  style={{
+                    left: `${positions[currentRole].x}%`,
+                    top: `${((positions[currentRole].y - 42) / 48) * 100}%`
+                  }}
+                >
+                  {currentRole === "belle"
+                    ? profiles.belle.species === "rabbit"
+                      ? "🐰"
+                      : "🐱"
+                    : "🐶"}
+                </span>
+                {maps[otherRole] === currentMap && (
+                  <span
+                    className="radar-dot partner-dot"
+                    style={{
+                      left: `${positions[otherRole].x}%`,
+                      top: `${((positions[otherRole].y - 42) / 48) * 100}%`
+                    }}
+                  >
+                    {otherRole === "belle"
+                      ? profiles.belle.species === "rabbit"
+                        ? "🐰"
+                        : "🐱"
+                      : "🐶"}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </aside>
+
+        {/* ===============================================================
+            TOP-RIGHT MINIMAL HUD: COUPLE LEVEL & AFFECTION CAPSULE
+            =============================================================== */}
+        <div
+          className="stage-hud-affection stage-hud-ignore"
+          onClick={(e) => {
+            e.stopPropagation();
+            setAffectionModalOpen(true);
+          }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setAffectionModalOpen(true)}
+        >
+          <div className="affection-hud-top">
+            <span className="affection-level-pill">
+              {levelInfo.badge} Lv.{levelInfo.level}
+            </span>
+            <strong className="affection-title-text">{levelInfo.title}</strong>
+            <span className="affection-heart-count">
+              <Heart size={11} fill="#e25b64" color="#e25b64" /> {levelInfo.exp}
+            </span>
+          </div>
+          <div className="affection-progress-track">
+            <div className="affection-progress-fill" style={{ width: `${levelInfo.pct}%` }} />
+          </div>
+        </div>
+
+        {/* Fixed 100% Canvas */}
+        <div
+          className={`world-fixed-canvas map-bg-${currentMap}`}
+          style={{ backgroundImage: `url("${stageBgImage}")` }}
+        >
+          {/* =========================================================
+               MAP 1: CENTRAL GARDEN ("garden") — Pure Illustrated Assets Only
+              ========================================================= */}
           {currentMap === "garden" && (
             <>
-              {/* Belle's Fairy-Tale Cottage (Left Zone Portal) */}
+              {/* Belle's Fairy-Tale Cottage */}
               <button
                 type="button"
                 className="cottage-portal belle-cottage"
-                style={{ zIndex: 43 }}
-                onClick={(e) => handlePortalToHouse(e, "belle_house")}
+                style={{ left: "20%", top: "41%", zIndex: 43 }}
+                onClick={(e) =>
+                  walkAndTransitionToMap(e, { x: 20, y: 52 }, "belle_house", { x: 50, y: 76 })
+                }
                 aria-label={t.enterBelleHouse}
               >
                 <img src={characterAsset("belle-cottage.webp")} alt="" />
                 <span className="cottage-door-badge">
-                  <Home size={12} /> {t.mapBelleHouse}
-                  {maps.belle === "belle_house" && <i className="inside-tag">Belle 🏠</i>}
-                  {maps.partner === "belle_house" && <i className="inside-tag">🐶 🏠</i>}
+                  <Home size={11} /> {t.mapBelleHouse}
+                  {maps.belle === "belle_house" && <i className="inside-tag">🐱</i>}
+                  {maps.partner === "belle_house" && <i className="inside-tag">🐶</i>}
                 </span>
               </button>
 
-              {/* Partner's Cozy Cottage (Right Zone Portal) */}
+              {/* Partner's Cozy Cottage */}
               <button
                 type="button"
                 className="cottage-portal partner-cottage"
-                style={{ zIndex: 43 }}
-                onClick={(e) => handlePortalToHouse(e, "partner_house")}
+                style={{ left: "80%", top: "41%", zIndex: 43 }}
+                onClick={(e) =>
+                  walkAndTransitionToMap(e, { x: 80, y: 52 }, "partner_house", { x: 50, y: 76 })
+                }
                 aria-label={t.enterPartnerHouse}
               >
                 <img src={characterAsset("partner-cottage.webp")} alt="" />
                 <span className="cottage-door-badge">
-                  <Home size={12} /> {t.mapPartnerHouse}
-                  {maps.belle === "partner_house" && <i className="inside-tag">Belle 🏠</i>}
-                  {maps.partner === "partner_house" && <i className="inside-tag">🐶 🏠</i>}
+                  <Home size={11} /> {t.mapPartnerHouse}
+                  {maps.belle === "partner_house" && <i className="inside-tag">🐱</i>}
+                  {maps.partner === "partner_house" && <i className="inside-tag">🐶</i>}
                 </span>
               </button>
 
-              {/* Spot 1: Wish Mailbox (Left Zone x:25, y:53) */}
-              <button
-                type="button"
-                className={`world-spot-btn spot-mailbox ${gardenGift ? "has-new-gift" : ""}`}
-                style={{ left: "25%", top: "53%", zIndex: 52 }}
-                onClick={(e) => void handleInteractiveSpotClick(e, "wish_mailbox")}
-              >
-                {gardenGift && <span className="spot-floating-alert">💌 NEW!</span>}
-                <span className="spot-visual-icon">📮</span>
-                <span className="spot-label-pill">{t.spotMailboxLabel}</span>
-              </button>
-
-              {/* Spot 2: Growing Couple Love Tree (Left-Center Meadow x:33, y:46) */}
-              <button
-                type="button"
-                className={`world-spot-btn spot-couple-tree stage-${treeStage.level} ${sharedActiveSpot === "couple_tree" ? "synergy-active" : ""}`}
-                style={{ left: "33%", top: "46%", zIndex: 46 }}
-                onClick={(e) => void handleInteractiveSpotClick(e, "couple_tree")}
-              >
-                {sharedActiveSpot === "couple_tree" && (
-                  <span className="spot-synergy-arch">🌸💞🌸</span>
-                )}
-                <div className="couple-tree-visual">
-                  <img
-                    src={characterAsset("garden-flowerbed-prop.webp")}
-                    alt=""
-                    className="tree-base-flowerbed"
-                  />
-                  <span className="tree-crown-emoji">{treeStage.emoji}</span>
-                </div>
-                <span className="spot-label-pill">
-                  {t.spotTreeLabel} <em>{treeStage.badge} · 💧{worldProps.coupleTreeExp || 0}</em>
-                </span>
-              </button>
-
-              {/* Spot 3: Central Watercolor Wooden Bench & Glowing Street Lamp (x:50, y:50) */}
+              {/* Central Wooden Bench & Street Lamp (Pure illustration, no sticker badge) */}
               <button
                 type="button"
                 className={`garden-center-bench-sprite interactive-bench ${sharedActiveSpot === "garden_bench" ? "synergy-active" : ""}`}
-                style={{ zIndex: 50 }}
+                style={{ left: "50%", top: "49%", zIndex: 50 }}
                 onClick={(e) => void handleInteractiveSpotClick(e, "garden_bench")}
+                aria-label={t.spotBenchLabel}
               >
                 {sharedActiveSpot === "garden_bench" && (
-                  <span className="spot-synergy-arch bench-heart-arch">💞 ♪ ♡</span>
+                  <span className="spot-synergy-arch bench-heart-arch">💞</span>
                 )}
                 <img src={characterAsset("garden-bench-prop.webp")} alt="" />
-                {(timeOfDay !== "day" || activeSpots.belle === "garden_bench" || activeSpots.partner === "garden_bench") && (
-                  <span className="bench-lantern-glow" />
-                )}
-                <span className="spot-label-pill bench-pill">🪑 {t.spotBenchLabel}</span>
-              </button>
-
-              {/* Spot 4: Starlight Campfire & Picnic Plaza (Center-Bottom x:50, y:74) */}
-              <button
-                type="button"
-                className={`world-spot-btn spot-campfire ${worldProps.campfireLit ? "is-lit" : "is-unlit"} ${sharedActiveSpot === "campfire" ? "synergy-active" : ""}`}
-                style={{ left: "50%", top: "74%", zIndex: 72 }}
-                onClick={(e) => void handleInteractiveSpotClick(e, "campfire")}
-              >
-                {sharedActiveSpot === "campfire" && (
-                  <span className="spot-synergy-arch">🔥💛🍓</span>
-                )}
-                <div className="campfire-visual">
-                  {worldProps.campfireLit && <span className="campfire-warm-aura" />}
-                  <span className="campfire-logs">🪵</span>
-                  <span className="campfire-flame">{worldProps.campfireLit ? "🔥" : "🧺"}</span>
-                  <span className="campfire-side-prop">🍓</span>
-                </div>
-                <span className="spot-label-pill">
-                  {worldProps.campfireLit ? "🔥" : "🧺"} {t.spotCampfireLabel}
-                </span>
-              </button>
-
-              {/* Spot 5: Stargazing Hill Observatory (Right-Upper Hill x:66, y:44) */}
-              <button
-                type="button"
-                className={`world-spot-btn spot-observatory ${sharedActiveSpot === "star_observatory" ? "synergy-active" : ""}`}
-                style={{ left: "66%", top: "44%", zIndex: 44 }}
-                onClick={(e) => void handleInteractiveSpotClick(e, "star_observatory")}
-              >
-                {sharedActiveSpot === "star_observatory" && (
-                  <span className="spot-synergy-arch">🌠💞🌙</span>
-                )}
-                <span className="spot-visual-icon">🔭</span>
-                <span className="spot-label-pill">{t.spotStarLabel}</span>
-              </button>
-
-              {/* Spot 6: Firefly Lotus Pond & Stepping Stones (Right Meadow x:74, y:72) */}
-              <button
-                type="button"
-                className={`world-spot-btn spot-sparkle-pond ${pondSplashActive ? "is-splashing" : ""} ${sharedActiveSpot === "sparkle_pond" ? "synergy-active" : ""}`}
-                style={{ left: "74%", top: "72%", zIndex: 68 }}
-                onClick={(e) => void handleInteractiveSpotClick(e, "sparkle_pond")}
-              >
-                {(pondSplashActive || sharedActiveSpot === "sparkle_pond") && (
-                  <span className="pond-leaping-fish">🐠 🫧 ✨</span>
-                )}
-                <div className="pond-water-basin">
-                  <span className="pond-ripple r-1" />
-                  <span className="pond-ripple r-2" />
-                  <span className="pond-lotus">🪷</span>
-                  <span className="pond-duck">🫧</span>
-                </div>
-                <span className="spot-label-pill">⛲ {t.spotPondLabel}</span>
+                {(timeOfDay !== "day" ||
+                  activeSpots.belle === "garden_bench" ||
+                  activeSpots.partner === "garden_bench") && <span className="bench-lantern-glow" />}
               </button>
             </>
           )}
 
-          {/* WIDE INTERIOR HOUSE ELEMENTS: 3 Separated 2-Player Furniture Spots + Exit Doorway */}
-          {currentMap !== "garden" && (
+          {/* =========================================================
+              MAP 2 & 3: BELLE'S HOUSE & PARTNER'S HOUSE INTERIORS
+              ========================================================= */}
+          {(currentMap === "belle_house" || currentMap === "partner_house") && (
             <>
-              {/* Wide Room Architectural Ambiance: Left Window Sunbeam & Center Woven Lounge Rug */}
               <div className="wide-room-sunbeam" aria-hidden="true" />
-              <div className={`wide-room-center-rug ${currentMap}`} aria-hidden="true" />
 
-              {/* Interior Spot 1: Left Tea Party Table (2-player face-to-face slots) */}
+              {/* Subtle Clickable Zone over the Illustrated Tea Table (No floating emoji sticker) */}
               <button
                 type="button"
-                className={`room-hotspot table-spot ${sharedActiveSpot === "tea_table" ? "synergy-active" : ""}`}
-                style={{ left: "25%", top: "55%" }}
+                className={`room-clean-zone table-spot ${sharedActiveSpot === "tea_table" ? "synergy-active" : ""}`}
+                style={{ left: "24%", top: "58%" }}
                 onClick={(e) => void handleInteractiveSpotClick(e, "tea_table")}
-              >
-                {sharedActiveSpot === "tea_table" && (
-                  <span className="spot-synergy-arch">🫖🍓💞</span>
-                )}
-                <span>🍓</span>
-                <small className="room-spot-caption">{t.spotTableLabel}</small>
-              </button>
+                aria-label={t.spotTableLabel}
+              />
 
-              {/* Interior Spot 2: Center Cozy Living Room Rug (2-player lounge slots) */}
+              {/* Subtle Clickable Zone over the Illustrated Bed (No floating emoji sticker) */}
               <button
                 type="button"
-                className={`room-hotspot rug-spot ${sharedActiveSpot === "cozy_rug" ? "synergy-active" : ""}`}
-                style={{ left: "48%", top: "67%" }}
-                onClick={(e) => void handleInteractiveSpotClick(e, "cozy_rug")}
-              >
-                {sharedActiveSpot === "cozy_rug" && (
-                  <span className="spot-synergy-arch">🧶🐾💞</span>
-                )}
-                <span>🧶</span>
-                <small className="room-spot-caption">{t.spotRugLabel}</small>
-              </button>
-
-              {/* Interior Spot 3: Right Bedroom Suite Bed (2-player side-by-side pillow slots) */}
-              <button
-                type="button"
-                className={`room-hotspot bed-spot ${sharedActiveSpot === "bed" ? "synergy-active" : ""}`}
-                style={{ left: "72%", top: "48%" }}
+                className={`room-clean-zone bed-spot ${sharedActiveSpot === "bed" ? "synergy-active" : ""}`}
+                style={{ left: "75%", top: "52%" }}
                 onClick={(e) => void handleInteractiveSpotClick(e, "bed")}
-              >
-                {sharedActiveSpot === "bed" && (
-                  <span className="spot-synergy-arch">💤💞🌙</span>
-                )}
-                <span>💤</span>
-                <small className="room-spot-caption">{t.spotBedLabel}</small>
-              </button>
+                aria-label={t.spotBedLabel}
+              />
 
+              {/* Exit Mat to Central Garden */}
               <button
                 type="button"
                 className={`room-exit-mat ${currentMap === "belle_house" ? "belle-mat" : "partner-mat"}`}
                 style={{ left: "50%", zIndex: 92 }}
-                onClick={handleExitRoomToGarden}
+                onClick={(e) =>
+                  walkAndTransitionToMap(
+                    e,
+                    { x: 50, y: 81 },
+                    "garden",
+                    currentMap === "belle_house" ? { x: 20, y: 55 } : { x: 80, y: 55 }
+                  )
+                }
               >
-                <DoorOpen size={15} />
+                <DoorOpen size={14} />
                 <span>{t.exitToGarden}</span>
               </button>
             </>
           )}
 
-          {/* Placed Decorations on Current Map */}
+          {/* Placed Illustrated Decorations on Current Map */}
           {currentMapDecors.map((item) => {
             const catalogEntry = DECOR_CATALOG.find((c) => c.type === item.type);
+            if (!catalogEntry?.sprite) return null;
             return (
               <button
                 key={item.id}
@@ -2466,19 +2727,15 @@ export default function CharacterWorld({
                   zIndex: Math.round(item.y) - 1
                 }}
                 onClick={(e) => handleDecorationClick(e, item)}
-                title={catalogEntry?.label[lang]}
+                title={catalogEntry.label[lang]}
               >
-                {catalogEntry?.sprite ? (
-                  <img src={characterAsset(catalogEntry.sprite)} alt={catalogEntry.label[lang]} />
-                ) : (
-                  <span className="decor-emoji-sprite">{catalogEntry?.emoji}</span>
-                )}
+                <img src={characterAsset(catalogEntry.sprite)} alt={catalogEntry.label[lang]} />
                 {decorating && <span className="decor-remove-badge">×</span>}
               </button>
             );
           })}
 
-          {/* Fireflies at night/sunset in the garden */}
+          {/* Fireflies at night/sunset in outdoor maps */}
           {currentMap === "garden" && timeOfDay !== "day" && (
             <div className="garden-fireflies" aria-hidden="true">
               <i className="ff-1" />
@@ -2513,7 +2770,7 @@ export default function CharacterWorld({
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                moveMyCharacterTo({ x: clamp(gardenGift.x - 4, 12, 86), y: gardenGift.y }, "run", "happy");
+                moveMyCharacterTo({ x: clamp(gardenGift.x - 4, 14, 86), y: gardenGift.y }, "run", "happy");
                 setGiftOpenView(true);
               }}
             >
@@ -2523,7 +2780,7 @@ export default function CharacterWorld({
             </button>
           )}
 
-          {/* Floating Heart & Sparkle Bursts */}
+          {/* Floating Heart & Affection Bursts */}
           {burstHearts.map((burst) => (
             <div
               key={burst.id}
@@ -2532,19 +2789,31 @@ export default function CharacterWorld({
               aria-hidden="true"
             >
               <span>{burst.symbol || "♡"}</span>
-              <span>✨</span>
+              {burst.label ? <b className="burst-exp-tag">{burst.label}</b> : <span>✨</span>}
               <span>♥</span>
             </div>
           ))}
 
-          {/* Belle Character (rendered if she is in currentMap) */}
+          {/* Belle Character */}
           {maps.belle === currentMap && (
             <button
               type="button"
               className={`roaming-pet belle ${mood.belle} ${currentRole === "belle" ? "is-mine" : "is-partner"} ${activeSpots.belle ? `on-spot-${activeSpots.belle}` : ""}`}
               style={getDepthStyle("belle")}
               onClick={(e) => handlePetCharacter(e, "belle")}
-              aria-label={`${profiles.belle.name}`}
+              onPointerDown={(e) => {
+                if (e.button === 2) return;
+                e.stopPropagation();
+                startLongPress(currentRole === "belle" ? "me" : "partner", e.clientX, e.clientY);
+              }}
+              onPointerUp={clearLongPressTimer}
+              onPointerCancel={clearLongPressTimer}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openStageContextMenu(currentRole === "belle" ? "me" : "partner", e.clientX, e.clientY);
+              }}
+              aria-label={profiles.belle.name}
             >
               {(speechBubble.belle ||
                 mood.belle === "love" ||
@@ -2575,14 +2844,26 @@ export default function CharacterWorld({
             </button>
           )}
 
-          {/* Partner Puppy Character (rendered if he is in currentMap) */}
+          {/* Partner Puppy Character */}
           {maps.partner === currentMap && (
             <button
               type="button"
               className={`roaming-pet partner ${mood.partner} ${currentRole === "partner" ? "is-mine" : "is-partner"} ${activeSpots.partner ? `on-spot-${activeSpots.partner}` : ""}`}
               style={getDepthStyle("partner")}
               onClick={(e) => handlePetCharacter(e, "partner")}
-              aria-label={`${profiles.partner.name}`}
+              onPointerDown={(e) => {
+                if (e.button === 2) return;
+                e.stopPropagation();
+                startLongPress(currentRole === "partner" ? "me" : "partner", e.clientX, e.clientY);
+              }}
+              onPointerUp={clearLongPressTimer}
+              onPointerCancel={clearLongPressTimer}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openStageContextMenu(currentRole === "partner" ? "me" : "partner", e.clientX, e.clientY);
+              }}
+              aria-label={profiles.partner.name}
             >
               {(speechBubble.partner ||
                 mood.partner === "love" ||
@@ -2614,20 +2895,192 @@ export default function CharacterWorld({
           )}
         </div>
 
-        <div className="garden-stage-hint">
-          {decorating
-            ? t.tapHintDecor
-            : currentMap === "garden"
-              ? t.tapHintGarden
-              : t.tapHintHouse}
-        </div>
+        {/* Show hint banner ONLY when decorating mode is active */}
+        {decorating && <div className="garden-stage-hint">{t.tapHintDecor}</div>}
+
+        {/* ===============================================================
+            FLOATING CONTEXT MENU (Right-Click on PC / Long-Press on Mobile)
+            =============================================================== */}
+        {contextMenu && (
+          <div
+            className="stage-context-menu-backdrop stage-hud-ignore"
+            onClick={(e) => {
+              e.stopPropagation();
+              setContextMenu(null);
+            }}
+          >
+            <div
+              className="stage-context-menu-card"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="context-menu-header">
+                <strong>
+                  {contextMenu.targetType === "me"
+                    ? `🐾 ${t.menuTitleMe}`
+                    : contextMenu.targetType === "partner"
+                      ? `💞 ${t.menuTitlePartner}`
+                      : `🌿 ${t.menuTitleGround}`}
+                </strong>
+                <button type="button" className="context-close-btn" onClick={() => setContextMenu(null)}>
+                  <X size={15} />
+                </button>
+              </div>
+
+              {/* Inline Speech Bubble Input & Quick Chips */}
+              <form
+                className="context-speech-row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSendSpeechBubble();
+                }}
+              >
+                <MessageCircleHeart size={15} />
+                <input
+                  type="text"
+                  maxLength={28}
+                  placeholder={t.speechPlaceholder}
+                  value={speechDraft}
+                  onChange={(e) => setSpeechDraft(e.target.value)}
+                />
+                <button type="submit">
+                  <Send size={13} /> {t.speechSend}
+                </button>
+              </form>
+
+              <div className="context-quick-chips">
+                {t.quickChips.map((chip) => (
+                  <button key={chip} type="button" onClick={() => handleSendSpeechBubble(chip)}>
+                    {chip}
+                  </button>
+                ))}
+              </div>
+
+              {/* Couple Interactions Grid (+Affection EXP) */}
+              <div className="context-section-label">💞 둘만의 실시간 교감 (+애정도 ♥)</div>
+              <div className="context-action-grid">
+                <button type="button" onClick={() => void triggerCoopInteraction("pet")}>
+                  <span>👋</span> {t.coopPet} <em>+10♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("hug")}>
+                  <span>🤗</span> {t.coopHug} <em>+20♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("kiss")}>
+                  <span>💋</span> {t.coopKiss} <em>+20♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("feed")}>
+                  <span>🍓</span> {t.coopFeed} <em>+15♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("dance")}>
+                  <span>🎶</span> {t.coopDance} <em>+20♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("flower")}>
+                  <span>🌷</span> {t.coopFlower} <em>+15♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("jump")}>
+                  <span>✨</span> {t.coopJump} <em>+15♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("highfive")}>
+                  <span>🙌</span> {t.coopHighfive} <em>+15♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("photo")}>
+                  <span>📸</span> {t.coopPhoto} <em>+25♥</em>
+                </button>
+                <button type="button" onClick={() => void triggerCoopInteraction("nap")}>
+                  <span>💤</span> {t.coopNap} <em>+20♥</em>
+                </button>
+              </div>
+
+              {/* Character & World Tools */}
+              <div className="context-section-label">🛠️ 캐릭터 · 공간 옵션</div>
+              <div className="context-utility-row">
+                {contextMenu.targetType === "ground" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = resolveWalkableTarget(contextMenu.stageX, contextMenu.stageY, currentMap);
+                      setContextMenu(null);
+                      setTapTarget({ x: target.x, y: target.y, key: Date.now() });
+                      moveMyCharacterTo(target, "walk", "idle");
+                    }}
+                  >
+                    🚶 {t.walkHereBtn}
+                  </button>
+                )}
+
+                {currentRole === "belle" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextSp = profiles.belle.species === "rabbit" ? "cat" : "rabbit";
+                      void quickSwitchBelleSpecies(nextSp);
+                      setContextMenu(null);
+                    }}
+                  >
+                    {profiles.belle.species === "rabbit" ? "🐱 아기 고양이로 변신" : "🐰 아기 토끼로 변신"}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContextMenu(null);
+                    setGiftModalOpen(true);
+                  }}
+                >
+                  🎁 {t.leaveGift}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContextMenu(null);
+                    setDecorating((prev) => !prev);
+                  }}
+                >
+                  🌷 {decorating ? t.decorateDone : t.decorateBtn}
+                </button>
+
+                <button type="button" onClick={openMyEditor}>
+                  🪪 {t.editProfileBtn}
+                </button>
+              </div>
+
+              {/* Bright / Sunset / Night Lighting Toggle inside Menu */}
+              <div className="context-time-row">
+                <button
+                  type="button"
+                  className={timeMode === "day" ? "active" : ""}
+                  onClick={() => updateTimeTheme("day")}
+                >
+                  <Sun size={13} /> {t.timeDay}
+                </button>
+                <button
+                  type="button"
+                  className={timeMode === "sunset" ? "active" : ""}
+                  onClick={() => updateTimeTheme("sunset")}
+                >
+                  <Sunset size={13} /> {t.timeSunset}
+                </button>
+                <button
+                  type="button"
+                  className={timeMode === "night" ? "active" : ""}
+                  onClick={() => updateTimeTheme("night")}
+                >
+                  <Moon size={13} /> {t.timeNight}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Decoration Palette Drawer (when Decorating) */}
+      {/* Decoration Palette Drawer (Only shown when Decorating mode is active) */}
       {decorating && (
         <div className="garden-decor-palette" role="region" aria-label={t.decorateBtn}>
           <div className="decor-palette-header">
-            <strong><Flower2 size={15} /> {t.decorateBtn}</strong>
+            <strong>
+              <Flower2 size={15} /> {t.decorateBtn}
+            </strong>
             <div className="decor-palette-actions">
               <button
                 type="button"
@@ -2636,11 +3089,7 @@ export default function CharacterWorld({
               >
                 {t.decorateReset}
               </button>
-              <button
-                type="button"
-                className="decor-done-btn"
-                onClick={() => setDecorating(false)}
-              >
+              <button type="button" className="decor-done-btn" onClick={() => setDecorating(false)}>
                 <Check size={14} /> {t.decorateDone}
               </button>
             </div>
@@ -2665,306 +3114,310 @@ export default function CharacterWorld({
         </div>
       )}
 
-      {/* Real-Time Co-op Interaction Bar (when both characters are in the same space or want to meet) */}
-      <div className={`realtime-coop-bar ${isCloseTogether ? "is-close" : ""}`}>
-        <div className="coop-status-head">
-          <span className="coop-heart-badge">{isCloseTogether ? "💞" : isSameMap ? "🐾" : "🏡"}</span>
-          <p>
-            {isCloseTogether
-              ? t.sameMapNear
-              : isSameMap
-                ? t.sameMapFar
-                : `${profiles[otherRole].name} ${t.differentMapInfo} (${mapLabel(maps[otherRole])})`}
-          </p>
-          {!isCloseTogether && (
-            <button
-              type="button"
-              className="coop-approach-btn"
-              onClick={() => {
-                if (!isSameMap) {
-                  changeMyMap(maps[otherRole], {
-                    x: clamp(positions[otherRole].x + (currentRole === "belle" ? -11 : 11), 22, 78),
-                    y: clamp(positions[otherRole].y, 52, 80)
-                  });
-                } else {
-                  handleApproachPartner();
-                }
-              }}
-            >
-              <Navigation size={13} />
-              <span>{!isSameMap ? t.followPartner : t.approachPartnerBtn}</span>
-            </button>
-          )}
-        </div>
-
-        <div className="coop-action-buttons">
-          <button type="button" onClick={() => void triggerCoopInteraction("hug")}>
-            <span>🤗</span> {t.coopHug}
-          </button>
-          <button type="button" onClick={() => void triggerCoopInteraction("feed")}>
-            <span>🍓</span> {t.coopFeed}
-          </button>
-          <button type="button" onClick={() => void triggerCoopInteraction("flower")}>
-            <span>🌷</span> {t.coopFlower}
-          </button>
-          <button type="button" onClick={() => void triggerCoopInteraction("jump")}>
-            <span>✨</span> {t.coopJump}
-          </button>
-          <button type="button" onClick={() => void triggerCoopInteraction("nap")}>
-            <span>💤</span> {t.coopNap}
-          </button>
-        </div>
-      </div>
-
-      {/* Live Overhead Speech Bubble Bar + World Tools */}
-      <div className="live-speech-and-tools">
-        <form
-          className="live-speech-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSendSpeechBubble();
-          }}
-        >
-          <MessageCircleHeart size={17} className="speech-icon" />
-          <input
-            type="text"
-            maxLength={28}
-            placeholder={t.speechPlaceholder}
-            value={speechDraft}
-            onChange={(e) => setSpeechDraft(e.target.value)}
-          />
-          <button type="submit" className="speech-send-btn">
-            <Send size={14} /> {t.speechSend}
-          </button>
-        </form>
-
-        <div className="quick-speech-chips">
-          {t.quickChips.map((chip) => (
-            <button key={chip} type="button" onClick={() => handleSendSpeechBubble(chip)}>
-              {chip}
-            </button>
-          ))}
-        </div>
-
-        <div className="character-controls">
-          <button
-            type="button"
-            className={decorating ? "active-tool" : ""}
-            onClick={() => setDecorating((prev) => !prev)}
-          >
-            <Flower2 size={15} /> {decorating ? t.decorateDone : t.decorateBtn}
-          </button>
-          <button type="button" onClick={() => setGiftModalOpen(true)}>
-            <Gift size={15} /> {t.leaveGift}
-          </button>
-          <button type="button" className="primary" onClick={openMyEditor}>
-            <Pencil size={15} /> {t.edit}
-          </button>
-        </div>
-      </div>
-
-      {/* Character Profile Cards (Strict Owner Edit Lock) */}
-      <div className="character-profiles">
-        {profileList.map((profile) => {
-          const isMine = profile.role === currentRole;
-          return (
-            <article
-              key={profile.role}
-              className={`character-profile-row ${isMine ? "is-mine-card" : "is-readonly-card"}`}
-              onClick={() => handleProfileCardClick(profile.role)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && handleProfileCardClick(profile.role)}
-            >
-              <div className="character-profile-avatar-wrap">
-                <img
-                  className="character-profile-sprite"
-                  src={
-                    profile.role === "partner"
-                      ? characterAsset("partner-puppy.webp")
-                      : profile.species === "rabbit"
-                        ? characterAsset("belle-rabbit.webp")
-                        : characterAsset("belle-cat.webp")
-                  }
-                  alt=""
-                />
-                {profile.photoUrl && (
-                  <img
-                    className="character-profile-user-photo"
-                    src={profile.photoUrl}
-                    alt={profile.name}
-                  />
-                )}
-              </div>
-              <div>
-                <div className="profile-name-line">
-                  <h3>{profile.name}</h3>
-                  <span>{profile.species === "cat" ? t.cat : profile.species === "rabbit" ? t.rabbit : t.dog}</span>
-                  {isMine && (
-                    <small className="profile-edit-pill">
-                      <Pencil size={10} /> {t.editProfileBtn}
-                    </small>
-                  )}
-                </div>
-                <p>{profile.message || "♡"}</p>
-                <small><Cake size={13} /> {profile.birthday || t.emptyBirthday}</small>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-
-      {/* Place Gift Note Modal */}
-      {giftModalOpen && (
-        <div className="character-editor-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setGiftModalOpen(false)}>
-          <div className="character-editor" role="dialog" aria-modal="true" aria-label={t.giftModalTitle}>
-            <div className="editor-handle" />
-            <button type="button" className="editor-close" onClick={() => setGiftModalOpen(false)} aria-label={t.cancel}><X size={20} /></button>
-            <span className="editor-kicker">GARDEN GIFT NOTE</span>
-            <h3>{t.giftModalTitle}</h3>
-            <p className="gift-modal-desc">{t.giftModalDesc}</p>
-
-            <div className="gift-icon-picker">
-              <span>{t.giftIconLabel}</span>
-              <div className="gift-icon-row">
-                {(Object.keys(GIFT_ICONS) as Array<GardenGiftNote["icon"]>).map((iconKey) => (
-                  <button
-                    key={iconKey}
-                    type="button"
-                    className={giftIconDraft === iconKey ? "selected" : ""}
-                    onClick={() => setGiftIconDraft(iconKey)}
-                  >
-                    <span>{GIFT_ICONS[iconKey]}</span>
-                  </button>
-                ))}
-              </div>
+      {/* Couple Level & Affection Details Modal */}
+      {affectionModalOpen && (
+        <div className="character-modal-backdrop" onClick={() => setAffectionModalOpen(false)}>
+          <div className="character-modal gift-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="character-modal-head">
+              <h3>
+                {levelInfo.badge} {t.affectionTitle}
+              </h3>
+              <button type="button" onClick={() => setAffectionModalOpen(false)} aria-label={t.cancel}>
+                <X size={18} />
+              </button>
             </div>
+            <div className="affection-modal-summary">
+              <div className="affection-big-badge">
+                <span>{levelInfo.badge}</span>
+                <div>
+                  <strong>
+                    Lv.{levelInfo.level} · {levelInfo.title}
+                  </strong>
+                  <small>
+                    누적 애정도 {levelInfo.exp} ♥ (다음 레벨까지 {Math.max(0, levelInfo.curNext - levelInfo.exp)} ♥) · 총 교감{" "}
+                    {worldProps.interactionCount || 8}회
+                  </small>
+                </div>
+              </div>
+              <div className="affection-progress-track large">
+                <div className="affection-progress-fill" style={{ width: `${levelInfo.pct}%` }} />
+              </div>
+              <p className="gift-modal-desc">{t.affectionDesc}</p>
+            </div>
+            <div className="context-action-grid">
+              <button
+                type="button"
+                onClick={() => {
+                  setAffectionModalOpen(false);
+                  void triggerCoopInteraction("hug");
+                }}
+              >
+                <span>🤗</span> {t.coopHug} <em>+20♥</em>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAffectionModalOpen(false);
+                  void triggerCoopInteraction("kiss");
+                }}
+              >
+                <span>💋</span> {t.coopKiss} <em>+20♥</em>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAffectionModalOpen(false);
+                  void triggerCoopInteraction("photo");
+                }}
+              >
+                <span>📸</span> {t.coopPhoto} <em>+25♥</em>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAffectionModalOpen(false);
+                  void triggerCoopInteraction("dance");
+                }}
+              >
+                <span>🎶</span> {t.coopDance} <em>+20♥</em>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-            <label>
-              {t.giftMessageLabel}
+      {/* Modal: Leave a Gift / Note */}
+      {giftModalOpen && (
+        <div className="character-modal-backdrop" onClick={() => setGiftModalOpen(false)}>
+          <div
+            className="character-modal gift-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gift-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="character-modal-head">
+              <h3 id="gift-modal-title">{t.giftModalTitle}</h3>
+              <button type="button" onClick={() => setGiftModalOpen(false)} aria-label={t.cancel}>
+                <X size={18} />
+              </button>
+            </div>
+            <p className="gift-modal-desc">{t.giftModalDesc}</p>
+            <div className="gift-icon-picker" role="radiogroup" aria-label={t.giftIconLabel}>
+              {(["gift", "letter", "strawberry", "flower"] as const).map((iconKey) => (
+                <button
+                  key={iconKey}
+                  type="button"
+                  className={giftIconDraft === iconKey ? "selected" : ""}
+                  onClick={() => setGiftIconDraft(iconKey)}
+                >
+                  <span>{GIFT_ICONS[iconKey]}</span>
+                </button>
+              ))}
+            </div>
+            <label className="gift-input-label">
+              <span>{t.giftMessageLabel}</span>
               <input
+                type="text"
                 maxLength={60}
-                placeholder={t.giftPlaceholder}
                 value={giftTextDraft}
                 onChange={(e) => setGiftTextDraft(e.target.value)}
+                placeholder={t.giftPlaceholder}
               />
             </label>
-
-            <button type="button" className="editor-save" onClick={() => void handlePlaceGift()}>
-              <Gift size={18} /> {t.giftPlaceBtn}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Open Gift Note Viewer Modal */}
-      {giftOpenView && gardenGift && (
-        <div className="character-editor-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setGiftOpenView(false)}>
-          <div className="character-editor gift-note-card" role="dialog" aria-modal="true">
-            <div className="editor-handle" />
-            <button type="button" className="editor-close" onClick={() => setGiftOpenView(false)} aria-label={t.cancel}><X size={20} /></button>
-            <div className="gift-note-hero">{GIFT_ICONS[gardenGift.icon]}</div>
-            <span className="editor-kicker">{gardenGift.fromName} {t.giftFrom}</span>
-            <p className="gift-note-body">“{gardenGift.message}”</p>
-            <div className="gift-note-actions">
-              <button type="button" className="editor-photo-remove" onClick={() => void handleRemoveGift()}>
-                <Trash2 size={14} /> {t.giftRemove}
+            <div className="character-modal-actions">
+              <button type="button" onClick={() => setGiftModalOpen(false)}>
+                {t.cancel}
               </button>
-              <button type="button" className="editor-save" style={{ marginTop: 0 }} onClick={() => setGiftOpenView(false)}>
-                <Heart size={16} fill="currentColor" /> {t.cancel}
+              <button type="button" className="primary" onClick={() => void handlePlaceGift()}>
+                <Gift size={15} /> {t.giftPlaceBtn}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* My Character & Profile Editor Modal (Strictly for currentRole) */}
+      {/* Modal: View Discovered Gift */}
+      {giftOpenView && gardenGift && (
+        <div className="character-modal-backdrop" onClick={() => setGiftOpenView(false)}>
+          <div
+            className="character-modal gift-view-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="gift-view-icon">{GIFT_ICONS[gardenGift.icon]}</div>
+            <span className="gift-view-from">
+              {gardenGift.fromName} {t.giftFrom}
+            </span>
+            <p className="gift-view-message">“{gardenGift.message}”</p>
+            <div className="character-modal-actions">
+              <button type="button" onClick={() => void handleRemoveGift()}>
+                <Trash2Icon /> {t.giftRemove}
+              </button>
+              <button type="button" className="primary" onClick={() => setGiftOpenView(false)}>
+                <Heart size={15} /> {t.cancel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit ONLY My Character & Profile */}
       {editing && (
-        <div className="character-editor-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setEditing(false)}>
-          <div className="character-editor" role="dialog" aria-modal="true" aria-label={t.edit}>
-            <div className="editor-handle" />
-            <button type="button" className="editor-close" onClick={() => setEditing(false)} aria-label={t.cancel}><X size={20} /></button>
-            <span className="editor-kicker">{currentRole === "belle" ? "BELLE" : "MY PUPPY"}</span>
-            <h3>{t.edit}</h3>
+        <div className="character-modal-backdrop" onClick={() => setEditing(false)}>
+          <div
+            className="character-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="character-editor-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="character-modal-head">
+              <div>
+                <span className="editor-kicker">OUR GARDEN PROFILE</span>
+                <h3 id="character-editor-title">{t.edit}</h3>
+              </div>
+              <button type="button" onClick={() => setEditing(false)} aria-label={t.cancel}>
+                <X size={18} />
+              </button>
+            </div>
 
-            {currentRole === "belle" && (
-              <fieldset className="species-picker">
-                <legend>{t.choose}</legend>
-                {(["cat", "rabbit"] as BelleSpecies[]).map((species) => (
-                  <button
-                    key={species}
-                    type="button"
-                    className={draft.species === species ? "selected" : ""}
-                    onClick={() => setDraft({ ...draft, species })}
-                  >
-                    <img src={characterAsset(`belle-${species}.webp`)} alt="" />
-                    <span>{species === "cat" ? t.cat : t.rabbit}</span>
-                    {draft.species === species && <Check size={16} />}
-                  </button>
-                ))}
-              </fieldset>
-            )}
-
-            <div className="editor-photo-section">
-              <span className="editor-photo-label">{t.photoLabel}</span>
-              <div className="editor-photo-row">
-                <div className="editor-photo-preview">
-                  {draft.photoUrl ? (
-                    <img src={draft.photoUrl} alt="profile" />
-                  ) : (
-                    <img
-                      src={currentRole === "partner" ? characterAsset("partner-puppy.webp") : draft.species === "rabbit" ? characterAsset("belle-rabbit.webp") : characterAsset("belle-cat.webp")}
-                      alt=""
-                      className="placeholder-sprite"
-                    />
-                  )}
-                </div>
-                <div className="editor-photo-actions">
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/*,.heic,.heif"
-                    hidden
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = "";
-                      if (file) void handleDraftPhotoSelect(file);
-                    }}
+            <div className="character-editor-grid single-owner-editor">
+              <section className="character-editor-card">
+                <div className="editor-card-title">
+                  <img
+                    src={
+                      currentRole === "partner"
+                        ? characterAsset("partner-puppy.webp")
+                        : draft.species === "rabbit"
+                          ? characterAsset("belle-rabbit.webp")
+                          : characterAsset("belle-cat.webp")
+                    }
+                    alt=""
                   />
-                  <button
-                    type="button"
-                    className="editor-photo-btn"
-                    disabled={photoUploading}
-                    onClick={() => photoInputRef.current?.click()}
-                  >
-                    {photoUploading ? <LoaderCircle size={15} className="topic-spin" /> : <Camera size={15} />}
-                    <span>{photoUploading ? t.photoUploading : draft.photoUrl ? t.photoChange : t.photoUpload}</span>
-                  </button>
-                  {draft.photoUrl && (
+                  <div>
+                    <strong>{currentRole === "belle" ? "Belle" : "Partner"}</strong>
+                    <span>{ currentRole === "partner" ? t.dog : draft.species === "rabbit" ? t.rabbit : t.cat }</span>
+                  </div>
+                </div>
+
+                {/* User Profile Photo Upload */}
+                <div className="character-photo-upload-box">
+                  <span className="photo-box-label">{t.photoLabel}</span>
+                  <div className="photo-box-controls">
+                    <div className="photo-box-preview">
+                      {draft.photoUrl ? (
+                        <img src={draft.photoUrl} alt="Profile preview" />
+                      ) : (
+                        <Camera size={20} />
+                      )}
+                    </div>
+                    <input
+                      ref={photoInputRef}
+                      type="file"
+                      accept="image/*,.heic,.heif"
+                      hidden
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (file) void handleDraftPhotoSelect(file);
+                      }}
+                    />
                     <button
                       type="button"
-                      className="editor-photo-remove"
-                      onClick={() => setDraft({ ...draft, photoUrl: "" })}
+                      className="photo-upload-btn"
+                      disabled={photoUploading}
+                      onClick={() => photoInputRef.current?.click()}
                     >
-                      <Trash2 size={14} />
-                      <span>{t.photoRemove}</span>
+                      {photoUploading ? (
+                        <>
+                          <LoaderCircle size={14} className="spin-icon" /> {t.photoUploading}
+                        </>
+                      ) : (
+                        <>
+                          <Camera size={14} /> {draft.photoUrl ? t.photoChange : t.photoUpload}
+                        </>
+                      )}
                     </button>
-                  )}
+                    {draft.photoUrl && (
+                      <button
+                        type="button"
+                        className="photo-remove-btn"
+                        onClick={() => setDraft((prev) => ({ ...prev, photoUrl: "" }))}
+                      >
+                        {t.photoRemove}
+                      </button>
+                    )}
+                  </div>
+                  {photoError && <p className="photo-upload-error">{photoError}</p>}
                 </div>
-              </div>
-              {photoError && <p className="editor-photo-error">{photoError}</p>}
+
+                {currentRole === "belle" && (
+                  <div className="species-picker" role="radiogroup" aria-label={t.choose}>
+                    {(["cat", "rabbit"] as BelleSpecies[]).map((species) => (
+                      <button
+                        key={species}
+                        type="button"
+                        className={draft.species === species ? "selected" : ""}
+                        onClick={() => setDraft((current) => ({ ...current, species }))}
+                      >
+                        <img src={characterAsset(`belle-${species}.webp`)} alt="" />
+                        <span>{species === "cat" ? t.cat : t.rabbit}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <label>
+                  <span>{t.name}</span>
+                  <input
+                    value={draft.name}
+                    maxLength={20}
+                    onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </label>
+
+                <label>
+                  <span>{t.birthday}</span>
+                  <input
+                    type="date"
+                    value={draft.birthday}
+                    onChange={(event) => setDraft((current) => ({ ...current, birthday: event.target.value }))}
+                  />
+                </label>
+
+                <label>
+                  <span>{t.message}</span>
+                  <input
+                    value={draft.message}
+                    maxLength={42}
+                    onChange={(event) => setDraft((current) => ({ ...current, message: event.target.value }))}
+                  />
+                </label>
+              </section>
             </div>
 
-            <label>{t.name}<input maxLength={16} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
-            <label>{t.birthday}<input type="date" value={draft.birthday} onChange={(e) => setDraft({ ...draft, birthday: e.target.value })} /></label>
-            <label>{t.message}<input maxLength={40} value={draft.message} onChange={(e) => setDraft({ ...draft, message: e.target.value })} /></label>
-            <button type="button" className="editor-save" onClick={saveProfile} disabled={photoUploading}>
-              {saved ? <Check size={18} /> : currentRole === "belle" ? <Rabbit size={18} /> : <Heart size={18} />}
-              {saved ? t.saved : t.save}
-            </button>
+            <div className="character-modal-actions">
+              <button type="button" onClick={() => setEditing(false)}>
+                {t.cancel}
+              </button>
+              <button type="button" className="primary" onClick={() => void saveProfile()}>
+                {saved ? <Check size={15} /> : <Heart size={15} />}
+                {saved ? t.saved : t.save}
+              </button>
+            </div>
           </div>
         </div>
       )}
     </section>
+  );
+}
+
+function Trash2Icon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14Z" />
+    </svg>
   );
 }
